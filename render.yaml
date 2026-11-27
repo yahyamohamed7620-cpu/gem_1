@@ -1,0 +1,16 @@
+# إعداد النشر على Render — بمجرد ربط المستودع، Render هيقرأ الملف ده ويبني كل حاجة.
+services:
+  - type: web
+    name: kuwait-market
+    runtime: python
+    plan: free
+    buildCommand: "echo no build needed"
+    startCommand: "python app.py"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      # غيّر القيم دي لكلمة سر وإيميل آمنين للأدمن من لوحة Render
+      - key: ADMIN_EMAIL
+        value: "admin@kuwaitmarket.local"
+      - key: ADMIN_PASSWORD
+        value: "change-me-please"

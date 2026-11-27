@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kuwait Market — منصة التجارة الإلكترونية</title>
+<link rel="icon" href="/logo.png">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <nav class="nav">
+    <a href="#" class="logo" onclick="go('home')">
+      <img src="/logo.png" alt="Kuwait Market" style="height:40px;vertical-align:middle">
+      <span style="color:var(--blue)">Kuwait</span> <span style="color:var(--orange)">Market</span>
+    </a>
+    <div class="nav-links" id="navLinks">
+      <a onclick="go('home')">الرئيسية</a>
+      <a onclick="go('products')">المنتجات</a>
+      <a href="#how">كيف أبدأ؟</a>
+      <a href="#features">المميزات</a>
+      <!-- أزرار الضيف -->
+      <span id="guestBtns">
+        <a class="btn ghost sm" onclick="openAuth('login')">تسجيل دخول</a>
+        <a class="btn sm" onclick="openAuth('register')">سجّل الآن</a>
+      </span>
+      <!-- أزرار المستخدم -->
+      <span id="userBtns" class="hidden" style="display:flex;gap:12px;align-items:center">
+        <a class="btn ghost sm" onclick="go('products')">🛒<span id="cartCount" class="cart-badge">0</span></a>
+        <a class="btn blue sm" id="dashLink" onclick="go('dashboard')">لوحتي</a>
+        <a class="muted" style="cursor:pointer" onclick="logout()">خروج</a>
+      </span>
+    </div>
+  </nav>
+</header>
+
+<main id="app"></main>
+
+<!-- نافذة الدخول/التسجيل -->
+<div class="overlay" id="authModal">
+  <div class="modal">
+    <button class="x" onclick="closeAuth()">×</button>
+    <div class="tabs">
+      <button id="tabLogin" class="active" onclick="switchAuth('login')">دخول</button>
+      <button id="tabReg" onclick="switchAuth('register')">حساب جديد</button>
+    </div>
+    <div id="authAlert"></div>
+    <form id="loginForm" onsubmit="return doLogin(event)">
+      <div class="field"><label>الإيميل أو رقم الهاتف</label><input id="loginEmail" required></div>
+      <div class="field"><label>كلمة المرور</label><input id="loginPass" type="password" required></div>
+      <button class="btn" style="width:100%;justify-content:center">دخول</button>
+    </form>
+    <form id="regForm" class="hidden" onsubmit="return doRegister(event)">
+      <div class="field"><label>الاسم</label><input id="regName" required></div>
+      <div class="field"><label>الإيميل</label><input id="regEmail" type="email" required></div>
+      <div class="field"><label>رقم الهاتف</label><input id="regPhone"></div>
+      <div class="field"><label>كلمة المرور (6 أحرف على الأقل)</label><input id="regPass" type="password" required></div>
+      <button class="btn" style="width:100%;justify-content:center">إنشاء الحساب</button>
+    </form>
+  </div>
+</div>
+
+<!-- نافذة إتمام الطلب -->
+<div class="overlay" id="orderModal">
+  <div class="modal wide">
+    <button class="x" onclick="closeOrder()">×</button>
+    <h2>إتمام الطلب للعميل</h2>
+    <div id="orderAlert"></div>
+    <div id="cartItems"></div>
+    <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+    <h3 style="color:var(--blue);margin-bottom:12px">بيانات العميل</h3>
+    <form id="orderForm" onsubmit="return submitOrder(event)">
+      <div class="field"><label>اسم العميل</label><input id="custName" required></div>
+      <div class="field"><label>رقم هاتف العميل</label><input id="custPhone" required></div>
+      <div class="field"><label>المحافظة</label>
+        <select id="custGov">
+          <option>العاصمة</option><option>حولي</option><option>الفروانية</option>
+          <option>الأحمدي</option><option>الجهراء</option><option>مبارك الكبير</option>
+        </select>
+      </div>
+      <div class="field"><label>العنوان بالتفصيل</label><textarea id="custAddr" rows="2" required></textarea></div>
+      <div class="row-between" style="font-size:18px;font-weight:800;margin:14px 0">
+        <span>إجمالي البيع: <span id="ordTotal" style="color:var(--orange)">0</span> د.ك</span>
+        <span>عمولتك: <span id="ordComm" style="color:var(--green)">0</span> د.ك</span>
+      </div>
+      <button class="btn green" style="width:100%;justify-content:center">تأكيد الطلب</button>
+    </form>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+ecomerg.db
+server.log
