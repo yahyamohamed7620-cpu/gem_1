@@ -128,6 +128,15 @@ CREATE TABLE IF NOT EXISTS withdrawals (
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS ad_spend (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id  INTEGER NOT NULL REFERENCES products(id),
+    amount      REAL NOT NULL,
+    spend_date  TEXT NOT NULL,          -- YYYY-MM-DD
+    note        TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     token       TEXT PRIMARY KEY,
     user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

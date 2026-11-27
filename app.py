@@ -435,6 +435,40 @@ def api_admin_bulk_update(handler, user, body):
     return 200, {"ok": True, "count": len(ids)}
 
 
+def api_admin_add_spend(handler, user, body):
+    pid = body.get("product_id")
+    try:
+        amount = float(body.get("amount"))
+    except (TypeError, ValueError):
+        return 400, {"error": "ادخل مبلغ صحيح"}
+    if amount <= 0 or not pid:
+        return 400, {"error": "بيانات الصرف ناقصة"}
+    date = (body.get("date") or "").strip() or time.strftime("%Y-%m-%d")
+    conn = get_conn()
+    conn.execute("INSERT INTO ad_spend (product_id,amount,spend_date,note) VALUES (?,?,?,?)",
+                 (pid, amount, date, (body.get("note") or "").strip()))
+    conn.commit()
+    conn.close()
+    return 200, {"ok": True}
+
+
+def api_admin_spend_entries(handler, user, qs):
+    qs = qs or {}
+    pid = (qs.get("product_id") or [None])[0]
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM ad_spend WHERE product_id=? ORDER BY id DESC", (pid,)).fetchall()
+    conn.close()
+    return 200, {"entries": [row_to_dict(r) for r in rows]}
+
+
+def api_admin_delete_spend(handler, user, body):
+    conn = get_conn()
+    conn.execute("DELETE FROM ad_spend WHERE id=?", (body.get("id"),))
+    conn.commit()
+    conn.close()
+    return 200, {"ok": True}
+
+
 def api_product_stats(handler, user, qs):
     qs = qs or {}
     frm = (qs.get("from") or [None])[0]
@@ -454,6 +488,17 @@ def api_product_stats(handler, user, qs):
             FROM order_items oi JOIN orders o ON o.id=oi.order_id
             LEFT JOIN products pr ON pr.id=oi.product_id{wsql}""", params
     ).fetchall()
+    # صرف الإعلانات لكل منتج (بنفس فلتر التاريخ)
+    swhere, sparams = [], []
+    if frm:
+        swhere.append("spend_date >= ?")
+        sparams.append(frm)
+    if to:
+        swhere.append("spend_date <= ?")
+        sparams.append(to)
+    sw = (" WHERE " + " AND ".join(swhere)) if swhere else ""
+    spend_rows = conn.execute(f"SELECT product_id, COALESCE(SUM(amount),0) s FROM ad_spend{sw} GROUP BY product_id", sparams).fetchall()
+    spend_map = {r["product_id"]: r["s"] for r in spend_rows}
     conn.close()
     prod = {}
     for r in rows:
@@ -473,13 +518,27 @@ def api_product_stats(handler, user, qs):
         delivered, returned = cnt("delivered"), cnt("returned")
         def rate(a, b):
             return round(100.0 * a / b, 1) if b else 0.0
-        margin = round(p["revenue"] - p["cogs"], 3)  # ربح المنتج قبل الإعلانات (بيع − جملة للمسلّم)
+        margin = p["revenue"] - p["cogs"]              # ربح قبل الإعلانات (بيع − جملة للمسلّم)
+        spend = spend_map.get(pid, 0.0)                # صرف الإعلانات في الفترة
+        net = round(margin - spend, 3)                 # صافي الربح = الربح − الإعلانات
         out.append({"product_id": pid, "name": p["name"], "code": p["code"] or "", "total": total, "qty": p["qty"],
                     "pending": cnt("pending"), "confirmed_total": confirmed_total, "delivered": delivered,
                     "returned": returned, "cancelled": cnt("cancelled"),
                     "deliver_rate": rate(delivered, confirmed_total), "return_rate": rate(returned, confirmed_total),
                     "cancel_rate": rate(cnt("cancelled"), total),
-                    "revenue": round(p["revenue"], 3), "cogs": round(p["cogs"], 3), "margin": margin})
+                    "revenue": round(p["revenue"], 3), "cogs": round(p["cogs"], 3),
+                    "margin": round(margin, 3), "spend": round(spend, 3), "net_profit": net})
+    # ضيف المنتجات اللي ليها صرف لكن مفيش أوردرات عليها في الفترة
+    seen = {x["product_id"] for x in out}
+    for pid, s in spend_map.items():
+        if pid not in seen:
+            conn2 = get_conn()
+            pr = conn2.execute("SELECT name, code FROM products WHERE id=?", (pid,)).fetchone()
+            conn2.close()
+            out.append({"product_id": pid, "name": pr["name"] if pr else "?", "code": (pr["code"] if pr else "") or "",
+                        "total": 0, "qty": 0, "pending": 0, "confirmed_total": 0, "delivered": 0, "returned": 0,
+                        "cancelled": 0, "deliver_rate": 0.0, "return_rate": 0.0, "cancel_rate": 0.0,
+                        "revenue": 0.0, "cogs": 0.0, "margin": 0.0, "spend": round(s, 3), "net_profit": round(-s, 3)})
     out.sort(key=lambda x: -x["total"])
     return 200, {"products": out}
 
@@ -974,6 +1033,7 @@ AUTH_GET = {
     "/api/admin/admins": lambda h, u, q: api_admin_list_admins(h, u) if require_owner(u) else _DENY,
     "/api/admin/pending": lambda h, u, q: api_admin_pending(h, u) if has_perm(u, "marketers") else _DENY,
     "/api/admin/product-stats": lambda h, u, q: api_product_stats(h, u, q) if has_perm(u, "products") else _DENY,
+    "/api/admin/spend-entries": lambda h, u, q: api_admin_spend_entries(h, u, q) if has_perm(u, "products") else _DENY,
     "/api/admin/backup": lambda h, u, q: api_admin_backup(h, u, q) if require_owner(u) else _DENY,
 }
 AUTH_POST = {
@@ -995,6 +1055,8 @@ AUTH_POST = {
     "/api/admin/add-admin": lambda h, u, b: api_admin_add_admin(h, u, b) if require_owner(u) else _DENY,
     "/api/admin/update-admin": lambda h, u, b: api_admin_update_admin(h, u, b) if require_owner(u) else _DENY,
     "/api/admin/bulk-update-orders": lambda h, u, b: api_admin_bulk_update(h, u, b) if has_perm(u, "orders") else _DENY,
+    "/api/admin/add-spend": lambda h, u, b: api_admin_add_spend(h, u, b) if has_perm(u, "products") else _DENY,
+    "/api/admin/delete-spend": lambda h, u, b: api_admin_delete_spend(h, u, b) if has_perm(u, "products") else _DENY,
 }
 
 # المعالِجات اللي بتاخد body

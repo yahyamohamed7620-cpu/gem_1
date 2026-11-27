@@ -624,6 +624,49 @@ async function loadAdminDash(){
     $("#dashBody").innerHTML = html;
   }catch(e){ $("#dashBody").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
+let SPEND_PID=null, SPEND_NAME="";
+function openSpend(pid, name){
+  SPEND_PID=pid; SPEND_NAME=name;
+  const today=new Date().toISOString().slice(0,10);
+  $("#spendModalBody").innerHTML=`<button class="x" onclick="closeSpend()">×</button>
+    <h2>💰 صرف إعلانات: ${esc(name)}</h2>
+    <div id="spendAlert"></div>
+    <form onsubmit="return submitSpend(event)" style="margin-top:8px">
+      <div class="row-between">
+        <div class="field" style="flex:1"><label>المبلغ (د.ك)</label><input id="spAmount" type="number" step="0.001" required></div>
+        <div class="field" style="flex:1"><label>التاريخ</label><input id="spDate" type="date" value="${today}" required></div>
+      </div>
+      <div class="field"><label>ملاحظة (اختياري)</label><input id="spNote" placeholder="مثلاً: حملة ميتا"></div>
+      <button class="btn">➕ تسجيل الصرف</button>
+    </form>
+    <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+    <h3 style="color:var(--blue);margin-bottom:8px">سجل الصرف</h3>
+    <div id="spendList">...</div>`;
+  $("#spendModal").classList.add("show");
+  loadSpendEntries();
+}
+function closeSpend(){ $("#spendModal").classList.remove("show"); if(typeof loadProductStats==="function") loadProductStats(); }
+async function submitSpend(e){
+  e.preventDefault();
+  try{
+    await api("/api/admin/add-spend",{method:"POST",body:{product_id:SPEND_PID,amount:$("#spAmount").value,date:$("#spDate").value,note:$("#spNote").value}});
+    toast("تم تسجيل الصرف ✅"); $("#spAmount").value=""; $("#spNote").value=""; loadSpendEntries();
+  }catch(err){ $("#spendAlert").innerHTML=`<div class="alert err">${err.message}</div>`; }
+  return false;
+}
+async function loadSpendEntries(){
+  try{
+    const d=await api("/api/admin/spend-entries?product_id="+SPEND_PID);
+    $("#spendList").innerHTML = d.entries.length ? `<table><thead><tr><th>التاريخ</th><th>المبلغ</th><th>ملاحظة</th><th></th></tr></thead><tbody>
+      ${d.entries.map(x=>`<tr><td>${esc(x.spend_date)}</td><td><b>${kd(x.amount)} د.ك</b></td><td class="muted">${esc(x.note)}</td>
+        <td><button class="btn red sm" onclick="deleteSpend(${x.id})">حذف</button></td></tr>`).join("")}
+    </tbody></table>` : `<div class="empty">لا يوجد صرف مسجّل لهذا المنتج</div>`;
+  }catch(e){ $("#spendList").innerHTML=`<div class="empty">${e.message}</div>`; }
+}
+async function deleteSpend(id){
+  try{ await api("/api/admin/delete-spend",{method:"POST",body:{id}}); toast("تم الحذف"); loadSpendEntries(); }
+  catch(e){ toast(e.message); }
+}
 async function adminProductStats(){
   DASH_LOADER=loadProductStats;
   $("#dashMain").innerHTML = `<div class="panel"><h2 style="margin:0">📦 إحصائيات المنتجات</h2></div>`+dateFilterBar()+`<div id="dashBody"><div class="empty">...</div></div>`;
@@ -632,14 +675,16 @@ async function adminProductStats(){
 async function loadProductStats(){
   try{
     const d=await api("/api/admin/product-stats"+dashQuery());
-    $("#dashBody").innerHTML = d.products.length ? `<div class="panel" style="overflow-x:auto"><table><thead><tr><th>المنتج</th><th>الكود</th><th>أوردرات</th><th>مُسلّمة</th><th>ملغية</th><th>مرتجعة</th><th>نسبة التسليم</th><th>نسبة الإلغاء</th><th>إيراد المُسلّم</th><th>تكلفة الجملة</th><th>ربح المنتج</th></tr></thead><tbody>
+    $("#dashBody").innerHTML = d.products.length ? `<div class="panel" style="overflow-x:auto"><table><thead><tr><th>المنتج</th><th>الكود</th><th>أوردرات</th><th>مُسلّمة</th><th>ملغية</th><th>نسبة التسليم</th><th>نسبة الإلغاء</th><th>إيراد المُسلّم</th><th>الجملة</th><th>صرف الإعلانات</th><th>صافي الربح</th><th></th></tr></thead><tbody>
       ${d.products.map(p=>`<tr><td><b>${esc(p.name)}</b></td><td class="muted">${esc(p.code)||'—'}</td><td>${p.total}</td>
-        <td style="color:var(--green)">${p.delivered}</td><td style="color:var(--red)">${p.cancelled}</td><td style="color:#9a3412">${p.returned}</td>
+        <td style="color:var(--green)">${p.delivered}</td><td style="color:var(--red)">${p.cancelled}</td>
         <td><b>${p.deliver_rate}%</b></td><td><b style="color:var(--red)">${p.cancel_rate}%</b></td>
         <td>${kd(p.revenue)}</td><td class="muted">${kd(p.cogs)}</td>
-        <td><b style="color:${p.margin>=0?'var(--green)':'var(--red)'}">${kd(p.margin)} د.ك</b></td></tr>`).join("")}
+        <td style="color:var(--orange)">${kd(p.spend)}</td>
+        <td><b style="color:${p.net_profit>=0?'var(--green)':'var(--red)'}">${kd(p.net_profit)} د.ك</b></td>
+        <td><button class="btn gray sm" onclick="openSpend(${p.product_id},'${esc(p.name).replace(/'/g,"\\'")}')">💰 صرف</button></td></tr>`).join("")}
     </tbody></table>
-    <p class="muted" style="margin-top:10px;font-size:13px">«ربح المنتج» = إيراد المُسلّم − تكلفة الجملة (قبل خصم صرف الإعلانات والبونص). قريبًا هنضيف صرف الإعلانات لحساب صافي الربح.</p></div>` : `<div class="empty">لا توجد بيانات منتجات بعد</div>`;
+    <p class="muted" style="margin-top:10px;font-size:13px">«صافي الربح» = إيراد المُسلّم − تكلفة الجملة − صرف الإعلانات. اضغط «💰 صرف» لتسجيل مبلغ إعلانات المنتج.</p></div>` : `<div class="empty">لا توجد بيانات منتجات بعد. سجّل صرف إعلانات من قائمة المنتجات أو هنا بعد أول طلب.</div>`;
   }catch(e){ $("#dashBody").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
 
