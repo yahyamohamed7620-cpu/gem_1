@@ -366,12 +366,13 @@ async function dashOrders() {
   m.innerHTML = `<div class="panel"><h2>طلباتي</h2><div id="ordList">...</div></div>`;
   try {
     const d = await api("/api/my-orders");
+    MY_ORDERS = d.orders;
     $("#ordList").innerHTML = d.orders.length ? ordersTable(d.orders) :
       `<div class="empty">لا توجد طلبات بعد. <a style="color:var(--orange);cursor:pointer" onclick="openOrder()">اعمل أول طلب</a></div>`;
   } catch (e) { $("#ordList").innerHTML = `<div class="empty">${e.message}</div>`; }
 }
 function ordersTable(orders) {
-  return `<table><thead><tr><th>#</th><th>العميل</th><th>المنطقة</th><th>المنتجات</th><th>السعر</th><th>التوصيل</th><th>الإجمالي</th><th>الحالة</th></tr></thead><tbody>
+  return `<table><thead><tr><th>#</th><th>العميل</th><th>المنطقة</th><th>المنتجات</th><th>السعر</th><th>التوصيل</th><th>الإجمالي</th><th>الحالة</th><th>🖨️</th></tr></thead><tbody>
     ${orders.map(o=>{const del=o.delivery||0; const grand=(o.total||0)+del; return `<tr>
       <td>#${o.id}</td>
       <td>${esc(o.customer_name)}<br><small class="muted">${esc(o.customer_phone)}</small></td>
@@ -381,6 +382,7 @@ function ordersTable(orders) {
       <td>${kd(del)}</td>
       <td style="font-weight:700;color:var(--orange)">${kd(grand)}</td>
       <td><span class="badge b-${o.status}">${statusAr(o.status)}</span></td>
+      <td><button class="btn gray sm" onclick="printLabel(${o.id})">طباعة</button></td>
     </tr>`;}).join("")}
   </tbody></table>`;
 }
@@ -713,6 +715,7 @@ async function loadProductStats(){
 let OF = {group:"",status:"",from:"",to:"",q:""};
 let OSEL = new Set();
 let ADMIN_ORDERS = [];
+let MY_ORDERS = [];
 async function adminOrders() {
   let groups=[]; try{ groups=(await api("/api/admin/groups")).groups; }catch(e){}
   $("#dashMain").innerHTML=`<div class="panel">
@@ -767,7 +770,7 @@ async function bulkUpdate(){
   catch(e){ toast(e.message); }
 }
 function printLabel(id){
-  const o=ADMIN_ORDERS.find(x=>x.id===id); if(!o)return;
+  const o=ADMIN_ORDERS.find(x=>x.id===id)||MY_ORDERS.find(x=>x.id===id); if(!o)return;
   const del=o.delivery||0;
   const items=(o.items||[]).map(i=>`${i.product_name} × ${i.qty}`).join("\n");
   $("#labelModalBody").innerHTML=`<button class="x" onclick="$('#labelModal').classList.remove('show')">×</button>
