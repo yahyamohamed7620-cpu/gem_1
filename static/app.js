@@ -150,47 +150,47 @@ function renderHome() {
     <div class="hero-in" style="grid-template-columns:1fr;max-width:820px;text-align:center">
       <div>
         <img src="/logo.png" alt="Kuwait Market" style="height:90px;background:#fff;border-radius:16px;padding:6px;margin-bottom:18px">
-        <h1>ابدأ تجارتك الإلكترونية في الكويت <em>بدون رأس مال</em></h1>
-        <p>أدِر متجرك، سوّق منتجاتنا، واكسب عمولة على كل بيعة. إحنا بنوفرلك المنتج والتغليف والشحن والتحصيل.</p>
+        <h1>منصة <em>Kuwait Market</em> لإدارة التجارة الإلكترونية</h1>
+        <p>منصة متكاملة لإدارة المنتجات والطلبات وفرق العمل — مديرين ومسوّقين ومودريتور — مع متابعة لحظية للمبيعات والأرباح ونسب التسليم.</p>
         <div class="hero-actions" style="justify-content:center">
-          <a class="btn" onclick="USER?go('products'):openAuth('register')">ابدأ الآن مجاناً</a>
+          <a class="btn" onclick="USER?go(isAdminRole()?'dashboard':'products'):openAuth('login')">${USER?'افتح لوحتي':'تسجيل الدخول'}</a>
           <a class="btn ghost" onclick="USER?go('products'):openAuth('login')">تصفّح المنتجات</a>
         </div>
         <div class="stats-row" style="justify-content:center">
-          <div class="stat"><b>+5K</b><small>تاجر نشط</small></div>
-          <div class="stat"><b>15K+</b><small>منتج</small></div>
-          <div class="stat"><b>100%</b><small>مجاني</small></div>
+          <div class="stat"><b>👥</b><small>فرق ومجموعات</small></div>
+          <div class="stat"><b>📊</b><small>تقارير وأرباح</small></div>
+          <div class="stat"><b>🔗</b><small>ربط إعلاني</small></div>
         </div>
       </div>
     </div>
   </section>
 
   <section class="about"><div class="about-in">
-    <h2 class="section-title">من نحن؟</h2>
-    <p>Kuwait Market أول منصة في الكويت بتقدّم خدمات متكاملة لكل من يحلم ببناء كيان تجاري إلكتروني، بأعلى معدلات ربح ومن غير أي تكاليف. بنوفرلك الدورة الكاملة لعملية البيع: المنتجات الأكثر مبيعاً، التجهيز والتغليف، والشحن من خلال مناديبنا وفروعنا في كل أنحاء الكويت.</p>
+    <h2 class="section-title">عن المنصة</h2>
+    <p>Kuwait Market منصة متكاملة لإدارة عمليات التجارة الإلكترونية للشركة: من إضافة المنتجات وتوزيع الفرق على المديرين، لتسجيل الطلبات ومتابعة التسليم والتحصيل، وصولًا لتقارير الأرباح وصرف الإعلانات لكل منتج — كله في مكان واحد وبصلاحيات دقيقة لكل دور.</p>
   </div></section>
 
   <section id="features"><div class="wrap">
-    <h2 class="section-title">ليه تنضم لـ Kuwait Market؟</h2>
-    <p class="section-sub">كل اللي محتاجه عشان تبدأ تجارتك وتكسب</p>
+    <h2 class="section-title">مميزات المنصة</h2>
+    <p class="section-sub">كل اللي تحتاجه الشركة لإدارة الفرق والمبيعات</p>
     <div class="features">
-      ${feature("💰","رأس مال بسيط","مشروع أحلامك برأس مال بسيط للإعلانات فقط")}
-      ${feature("🏷️","مرونة في التسعير","حدّد سعر البيع بين حد أدنى وأعلى يناسبك")}
-      ${feature("📣","مهمتك التسويق فقط","إحنا بنتكفل بالباقي، إنت بس سوّق")}
-      ${feature("📦","تنوع المنتجات","أكثر من 15000 منتج متجدد باستمرار")}
-      ${feature("📈","عمولة وربح صافي","أكبر العمولات والأرباح اللي تحلم بيها")}
-      ${feature("💳","سحب أرباحك بسهولة","أكثر من طريقة دفع لسحب أرباحك فوراً")}
+      ${feature("👥","فرق تحت مديرين","كل مجموعة ومسوّقينها تحت مدير، وكل قائد يشوف أرقام فريقه")}
+      ${feature("📊","تقارير وأرباح","نسب التأكيد والتسليم والمرتجع، وأرباح كل منتج بعد الإعلانات")}
+      ${feature("🔗","ربط إعلاني بالأكواد","كود لكل منتج لمتابعة صرف ميتا وتيك توك وربح كل منتج")}
+      ${feature("📦","إدارة المنتجات والطلبات","إضافة وتعديل وبحث وفلترة وتحديث جماعي للحالات")}
+      ${feature("🖨️","بوليصة شحن وتحصيل","طباعة بوليصة لكل طلب بالمبلغ المطلوب تحصيله")}
+      ${feature("🔒","صلاحيات دقيقة","كل مدير ومودريتور يشوف ويعمل حسب صلاحياته فقط")}
     </div>
   </div></section>
 
   <section id="how" style="background:#fff"><div class="wrap">
-    <h2 class="section-title">كيف أبدأ؟</h2>
-    <p class="section-sub">4 خطوات بسيطة وتبدأ تكسب</p>
+    <h2 class="section-title">إزاي بتشتغل المنصة</h2>
+    <p class="section-sub">دورة العمل من الإدارة للتسليم</p>
     <div class="steps">
-      ${step(1,"أنشئ حساب","سجّل حساب جديد مجاناً في دقيقة")}
-      ${step(2,"اختر العروض","تصفّح المنتجات واختار اللي يناسبك")}
-      ${step(3,"سوّق المنتجات","انشر على السوشيال ميديا وهات عملاء")}
-      ${step(4,"اكسب العمولة","كل بيعة توصل، عمولتك تدخل رصيدك")}
+      ${step(1,"الإدارة تجهّز","إضافة المنتجات وأكوادها وتوزيع الفرق على المديرين")}
+      ${step(2,"المسوّق يسجّل","يسجّل طلبات العملاء ويختار المنطقة والتوصيل تلقائي")}
+      ${step(3,"المتابعة والتأكيد","المودريتور والمدير يتابعوا ويأكّدوا ويحدّثوا الحالات")}
+      ${step(4,"التقارير والأرباح","الإدارة تشوف نسب التسليم وصرف كل منتج وصافي ربحه")}
     </div>
   </div></section>`;
   renderFooter();
@@ -1066,7 +1066,7 @@ function renderFooter(){
   f.innerHTML=`<div class="logo" style="font-size:24px;font-weight:800;justify-content:center;color:#fff">
       <img src="/logo.png" alt="Kuwait Market" style="height:46px;background:#fff;border-radius:10px;padding:3px">
       <span style="color:#fff">Kuwait</span> <span style="color:var(--orange)">Market</span></div>
-    <p>منصة رائدة في التجارة الإلكترونية في الكويت — سوّق واربح بسهولة</p>
+    <p>منصة متكاملة لإدارة التجارة الإلكترونية وفرق العمل</p>
     <p>© Kuwait Market 2026</p>`;
   document.body.appendChild(f);
 }
