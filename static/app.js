@@ -41,6 +41,19 @@ async function api(path, { method = "GET", body } = {}) {
 function kd(n) { return Number(n).toFixed(3); }
 // تهريب أي بيانات من المستخدمين قبل عرضها (حماية من XSS)
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// زر إظهار/إخفاء كلمة المرور
+function togglePw(id, el){
+  const inp=document.getElementById(id); if(!inp) return;
+  if(inp.type==="password"){ inp.type="text"; el.textContent="🙈"; }
+  else { inp.type="password"; el.textContent="👁️"; }
+}
+function pwField(id, label, ph){
+  return `<div class="field"><label>${label}</label>
+    <div style="position:relative">
+      <input id="${id}" type="password" ${ph?`placeholder="${ph}"`:""} required style="padding-left:42px">
+      <span onclick="togglePw('${id}',this)" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);cursor:pointer;user-select:none;font-size:18px">👁️</span>
+    </div></div>`;
+}
 
 function syncNav() {
   if (USER) {
@@ -538,9 +551,9 @@ function passwordFormHTML(){
   return `<div class="panel" style="max-width:460px"><h2>تغيير كلمة المرور</h2>
     <div id="pwAlert"></div>
     <form onsubmit="return changePassword(event)">
-      <div class="field"><label>كلمة المرور الحالية</label><input id="pwOld" type="password" required></div>
-      <div class="field"><label>كلمة المرور الجديدة (6 أحرف+)</label><input id="pwNew" type="password" required></div>
-      <div class="field"><label>تأكيد كلمة المرور الجديدة</label><input id="pwNew2" type="password" required></div>
+      ${pwField("pwOld","كلمة المرور الحالية")}
+      ${pwField("pwNew","كلمة المرور الجديدة (6 أحرف+)")}
+      ${pwField("pwNew2","تأكيد كلمة المرور الجديدة")}
       <button class="btn">حفظ كلمة المرور</button>
     </form></div>`;
 }
@@ -955,7 +968,7 @@ async function adminAdmins(){
       </div>
       <div class="row-between">
         <div class="field" style="flex:1"><label>الهاتف</label><input id="naPhone"></div>
-        <div class="field" style="flex:1"><label>كلمة المرور (6 أحرف+)</label><input id="naPass" type="password" required></div>
+        <div style="flex:1">${pwField("naPass","كلمة المرور (6 أحرف+)")}</div>
       </div>
       <div class="field"><label>الصلاحيات</label><div id="naPerms" style="background:#f8fafc;border-radius:10px;padding:10px">${permChecks([])}</div></div>
       <button class="btn">➕ إضافة المدير</button>

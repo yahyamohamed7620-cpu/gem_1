@@ -48,14 +48,22 @@
     <div id="authAlert"></div>
     <form id="loginForm" onsubmit="return doLogin(event)">
       <div class="field"><label>الإيميل أو رقم الهاتف</label><input id="loginEmail" required></div>
-      <div class="field"><label>كلمة المرور</label><input id="loginPass" type="password" required></div>
+      <div class="field"><label>كلمة المرور</label>
+        <div style="position:relative">
+          <input id="loginPass" type="password" required style="padding-left:42px">
+          <span onclick="togglePw('loginPass',this)" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);cursor:pointer;user-select:none;font-size:18px">👁️</span>
+        </div></div>
       <button class="btn" style="width:100%;justify-content:center">دخول</button>
     </form>
     <form id="regForm" class="hidden" onsubmit="return doRegister(event)">
       <div class="field"><label>الاسم</label><input id="regName" required></div>
       <div class="field"><label>الإيميل</label><input id="regEmail" type="email" required></div>
       <div class="field"><label>رقم الهاتف</label><input id="regPhone"></div>
-      <div class="field"><label>كلمة المرور (6 أحرف على الأقل)</label><input id="regPass" type="password" required></div>
+      <div class="field"><label>كلمة المرور (6 أحرف على الأقل)</label>
+        <div style="position:relative">
+          <input id="regPass" type="password" required style="padding-left:42px">
+          <span onclick="togglePw('regPass',this)" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);cursor:pointer;user-select:none;font-size:18px">👁️</span>
+        </div></div>
       <button class="btn" style="width:100%;justify-content:center">إنشاء الحساب</button>
     </form>
   </div>
