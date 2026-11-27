@@ -746,24 +746,64 @@ async function bulkUpdate(){
 }
 function printLabel(id){
   const o=ADMIN_ORDERS.find(x=>x.id===id); if(!o)return;
-  const del=o.delivery||0; const grand=(o.total||0)+del;
-  const items=(o.items||[]).map(i=>`${esc(i.product_name)} × ${i.qty}`).join("<br>");
+  const del=o.delivery||0;
+  const items=(o.items||[]).map(i=>`${i.product_name} × ${i.qty}`).join("\n");
+  $("#labelModalBody").innerHTML=`<button class="x" onclick="$('#labelModal').classList.remove('show')">×</button>
+    <h2>🖨️ بوليصة شحن — طلب #${o.id}</h2>
+    <p class="muted" style="font-size:13px">تقدر تعدّل أي بيان قبل الطباعة.</p>
+    <div class="row-between">
+      <div class="field" style="flex:1"><label>اسم العميل</label><input id="lbName" value="${escAttr(o.customer_name||'')}"></div>
+      <div class="field" style="flex:1"><label>الهاتف</label><input id="lbPhone" value="${escAttr(o.customer_phone||'')}"></div>
+    </div>
+    <div class="row-between">
+      <div class="field" style="flex:1"><label>التقسيمة</label><input id="lbZone" value="${escAttr(o.zone||'')}"></div>
+      <div class="field" style="flex:1"><label>المنطقة</label><input id="lbArea" value="${escAttr(o.area||'')}"></div>
+    </div>
+    <div class="field"><label>العنوان</label><textarea id="lbAddr" rows="2">${escHtml(o.customer_address||'')}</textarea></div>
+    <div class="field"><label>المنتجات</label><textarea id="lbItems" rows="2">${escHtml(items)}</textarea></div>
+    <div class="row-between">
+      <div class="field" style="flex:1"><label>قيمة المنتجات (د.ك)</label><input id="lbPrice" type="number" step="0.001" value="${kd(o.total||0)}" oninput="lbRecalc()"></div>
+      <div class="field" style="flex:1"><label>سعر التوصيل (د.ك)</label><input id="lbDel" type="number" step="0.001" value="${kd(del)}" oninput="lbRecalc()"></div>
+    </div>
+    <div class="field"><label>طريقة عرض التوصيل على البوليصة</label>
+      <select id="lbMode" onchange="lbRecalc()">
+        <option value="free">توصيل مجاني (مضاف للسعر) — يُكتب: التوصيل مجاني</option>
+        <option value="sep">توصيل منفصل — يُكتب سعر التوصيل</option>
+      </select>
+    </div>
+    <div class="row-between" style="font-size:18px;font-weight:800;margin:10px 0;background:#f8fafc;padding:12px;border-radius:10px">
+      <span>المطلوب تحصيله</span><span><span id="lbTotal" style="color:var(--orange)">0</span> د.ك</span>
+    </div>
+    <button class="btn" style="width:100%;justify-content:center" onclick="doPrintLabel(${o.id})">🖨️ طباعة البوليصة</button>`;
+  $("#labelModal").classList.add("show");
+  lbRecalc();
+}
+function lbRecalc(){
+  const price=parseFloat($("#lbPrice").value)||0, del=parseFloat($("#lbDel").value)||0;
+  $("#lbTotal").textContent=kd(price+del);
+}
+function doPrintLabel(id){
+  const price=parseFloat($("#lbPrice").value)||0, del=parseFloat($("#lbDel").value)||0;
+  const grand=price+del;
+  const mode=$("#lbMode").value;
+  const deliveryLine = mode==="free"
+    ? `<div class="row"><span>التوصيل</span><b style="color:green">مجاني</b></div>`
+    : `<div class="row"><span>قيمة المنتجات</span><b>${kd(price)} د.ك</b></div><div class="row"><span>التوصيل</span><b>${kd(del)} د.ك</b></div>`;
+  const itemsHtml=esc($("#lbItems").value).replace(/\n/g,"<br>");
   const w=window.open("","_blank","width=420,height=640");
   if(!w){ toast("اسمح بالنوافذ المنبثقة للطباعة"); return; }
-  w.document.write(`<html dir="rtl"><head><meta charset="utf-8"><title>بوليصة #${o.id}</title>
+  w.document.write(`<html dir="rtl"><head><meta charset="utf-8"><title>بوليصة #${id}</title>
     <style>body{font-family:Tahoma,Arial;padding:16px;color:#111}.box{border:2px solid #111;border-radius:10px;padding:14px}h2{margin:0 0 10px;text-align:center;color:#142b52}.row{display:flex;justify-content:space-between;gap:10px;border-bottom:1px dashed #aaa;padding:6px 0}.big{font-size:22px;font-weight:bold;text-align:center;margin-top:12px;border:2px solid #111;border-radius:8px;padding:10px}</style></head>
     <body><div class="box"><h2>Kuwait Market — بوليصة شحن</h2>
-    <div class="row"><span>رقم الطلب</span><b>#${o.id}</b></div>
-    <div class="row"><span>العميل</span><b>${esc(o.customer_name)}</b></div>
-    <div class="row"><span>الهاتف</span><b>${esc(o.customer_phone)}</b></div>
-    <div class="row"><span>التقسيمة</span><b>${esc(o.zone)}</b></div>
-    <div class="row"><span>المنطقة</span><b>${esc(o.area)}</b></div>
-    <div class="row"><span>العنوان</span><b style="text-align:left">${esc(o.customer_address)}</b></div>
-    <div class="row"><span>المنتجات</span><b style="text-align:left">${items}</b></div>
-    <div class="row"><span>قيمة المنتجات</span><b>${kd(o.total)} د.ك</b></div>
-    <div class="row"><span>التوصيل</span><b>${kd(del)} د.ك</b></div>
+    <div class="row"><span>رقم الطلب</span><b>#${id}</b></div>
+    <div class="row"><span>العميل</span><b>${esc($("#lbName").value)}</b></div>
+    <div class="row"><span>الهاتف</span><b>${esc($("#lbPhone").value)}</b></div>
+    <div class="row"><span>التقسيمة</span><b>${esc($("#lbZone").value)}</b></div>
+    <div class="row"><span>المنطقة</span><b>${esc($("#lbArea").value)}</b></div>
+    <div class="row"><span>العنوان</span><b style="text-align:left">${esc($("#lbAddr").value)}</b></div>
+    <div class="row"><span>المنتجات</span><b style="text-align:left">${itemsHtml}</b></div>
+    ${deliveryLine}
     <div class="big">المطلوب تحصيله: ${kd(grand)} د.ك</div>
-    <div class="row" style="margin-top:8px"><span>المسوّق</span><b>${esc(o.marketer_name)}</b></div>
     </div><scr`+`ipt>window.onload=function(){window.print()}</scr`+`ipt></body></html>`);
   w.document.close();
 }
