@@ -215,8 +215,18 @@ async function renderProducts() {
   } catch (e) { $("#prodGrid").innerHTML = `<div class="empty">${e.message}</div>`; }
   renderFooter();
 }
+const CATEGORIES = [
+  "مستلزمات السيارات",
+  "الرياضة واللياقة",
+  "فصل الصيف",
+  "إلكترونيات وإكسسوارات",
+  "الصحة والعناية الشخصية",
+  "الأزياء والإكسسوارات",
+  "الأطفال والألعاب",
+  "المنزل والمطبخ",
+];
 function renderCatBar(){
-  const cats = ["الكل", ...[...new Set(PRODUCTS.map(p=>p.category).filter(Boolean))]];
+  const cats = ["الكل", ...CATEGORIES];
   if(!$("#catBar")) return;
   $("#catBar").innerHTML = cats.map(c=>
     `<button class="btn ${c===CURRENT_CAT?'':'gray'} sm" onclick="filterCat('${c.replace(/'/g,"\\'")}')">${c}</button>`).join("");
@@ -956,7 +966,9 @@ function adminProductForm(p){
         <div class="field" style="flex:1"><label>كود المنتج (للإعلانات)</label><input id="apCode" value="${edit?escAttr(p.code||''):''}" placeholder="مثلاً: KM-105"></div>
       </div>
       <div class="field"><label>الوصف</label><textarea id="apDesc" rows="2">${edit?escHtml(p.description||''):''}</textarea></div>
-      <div class="field"><label>التصنيف</label><input id="apCat" value="${edit?escAttr(p.category||''):''}" placeholder="مثلاً: إلكترونيات"></div>
+      <div class="field"><label>القسم</label><select id="apCat">${
+        ["<option value=''>— اختر القسم —</option>", ...CATEGORIES.map(c=>`<option value="${escAttr(c)}"${edit&&p.category===c?' selected':''}>${c}</option>`)].join("")
+      }</select></div>
       <div class="row-between">
         ${can("wholesale")?`<div class="field" style="flex:1"><label>💼 سعر الجملة (للأدمن فقط)</label><input id="apWholesale" type="number" step="0.001" value="${edit&&p.wholesale_price!=null?p.wholesale_price:''}" required></div>`:''}
         <div class="field" style="flex:1"><label>🏷️ سعر البيع (يظهر للمسوّق)</label><input id="apSell" type="number" step="0.001" value="${edit?p.sell_price:''}" required></div>
