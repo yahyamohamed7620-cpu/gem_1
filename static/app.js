@@ -124,7 +124,6 @@ function updateCartCount() {
 }
 function addToCart(pid) {
   if (!USER) { openAuth("login"); return; }
-  if (isAdminRole()) { toast("الأدمن مايعملش طلبات"); return; }
   const p = PRODUCTS.find((x) => x.id === pid);
   if (!CART[pid]) CART[pid] = { product: p, qty: 1 };
   else CART[pid].qty++;
@@ -291,7 +290,6 @@ function pmQty(d){
 }
 function addProductPage(pid, checkout){
   if (!USER) { openAuth("login"); return; }
-  if (isAdminRole()) { toast("الأدمن مايعملش طلبات"); return; }
   const p = PRODUCTS.find(x=>x.id===pid);
   CART[pid] = { product: p, qty: PM_QTY };
   updateCartCount();
@@ -491,6 +489,7 @@ function renderAdmin() {
   app.innerHTML = `<div class="dash">
     <aside class="side">
       <div class="u"><div class="av" style="background:var(--blue)">${USER.name[0]}</div><div><b>${USER.name}</b><br><small class="muted">${roleLabel}</small></div></div>
+      <a onclick="go('products')" style="background:var(--orange);color:#fff;font-weight:700">➕ تسجيل طلب جديد</a>
       ${menu.map(m=>`<a onclick="adminView('${m.v}')" id="av-${m.v}">${m.label}</a>`).join("")}
     </aside>
     <div id="dashMain"></div>
