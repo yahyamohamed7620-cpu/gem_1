@@ -199,14 +199,17 @@ const step = (n, t, d) => `<div class="step"><div class="num">${n}</div><h3 styl
 
 /* ================= المنتجات ================= */
 let CURRENT_CAT = "الكل";
+let PROD_SEARCH = "";
 async function renderProducts() {
   if (!USER) { openAuth("login"); renderHome(); return; }
   app.innerHTML = `<section><div class="wrap">
     <h2 class="section-title">المنتجات</h2>
     <p class="section-sub">اختر منتجاتك وابدأ التسويق</p>
+    <div style="max-width:460px;margin:0 auto 18px"><input id="prodSearch" oninput="PROD_SEARCH=this.value;renderProdGrid()" placeholder="🔍 ابحث عن منتج بالاسم أو الكود..." style="width:100%;padding:12px 16px;border:1px solid var(--line);border-radius:12px;font-size:15px"></div>
     <div id="catBar" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-bottom:24px"></div>
     <div class="grid" id="prodGrid"><div class="empty">جاري التحميل...</div></div>
   </div></section>`;
+  PROD_SEARCH = "";
   try {
     const d = await api("/api/products");
     PRODUCTS = d.products;
@@ -241,8 +244,10 @@ function catList(p){
   return s ? [s] : [];
 }
 function renderProdGrid(){
-  const list = CURRENT_CAT==="الكل" ? PRODUCTS : PRODUCTS.filter(p=>catList(p).includes(CURRENT_CAT));
-  $("#prodGrid").innerHTML = list.map(productCard).join("") || `<div class="empty">لا توجد منتجات في هذا القسم</div>`;
+  let list = CURRENT_CAT==="الكل" ? PRODUCTS : PRODUCTS.filter(p=>catList(p).includes(CURRENT_CAT));
+  const q = (PROD_SEARCH||"").trim().toLowerCase();
+  if(q) list = list.filter(p=>(p.name||"").toLowerCase().includes(q) || (p.code||"").toLowerCase().includes(q) || (p.description||"").toLowerCase().includes(q));
+  $("#prodGrid").innerHTML = list.map(productCard).join("") || `<div class="empty">لا توجد منتجات مطابقة</div>`;
 }
 function isImg(v){ return v && (v.indexOf("/uploads/")===0 || v.indexOf("http")===0); }
 function thumbInner(p){ return isImg(p.image) ? `<img src="${p.image}" alt="${p.name}" style="max-width:100%;max-height:150px;object-fit:contain">` : (p.image||"📦"); }
@@ -1071,7 +1076,10 @@ async function adminAdmins(){
   try{
     const d=await api("/api/admin/admins");
     PERM_CATALOG=d.perm_catalog;
-    const permChecks = (selected)=>Object.entries(PERM_CATALOG).map(([k,label])=>
+    const permChecks = (selected, boxId)=>
+      `<label style="display:inline-flex;align-items:center;gap:6px;margin:0 0 10px;font-weight:700;color:var(--blue);width:100%;border-bottom:1px dashed var(--line);padding-bottom:8px">
+        <input type="checkbox" onclick="togglePerms('${boxId}',this.checked)" ${Object.keys(PERM_CATALOG).every(k=>selected.includes(k))?"checked":""}> ✅ تحديد الكل</label>`
+      + Object.entries(PERM_CATALOG).map(([k,label])=>
       `<label style="display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0;font-weight:500">
         <input type="checkbox" value="${k}" ${selected.includes(k)?"checked":""}> ${label}</label>`).join("");
     $("#addAdminForm").innerHTML=`<form onsubmit="return addAdmin(event)">
@@ -1083,7 +1091,7 @@ async function adminAdmins(){
         <div class="field" style="flex:1"><label>الهاتف</label><input id="naPhone"></div>
         <div style="flex:1">${pwField("naPass","كلمة المرور (6 أحرف+)")}</div>
       </div>
-      <div class="field"><label>الصلاحيات</label><div id="naPerms" style="background:#f8fafc;border-radius:10px;padding:10px">${permChecks([])}</div></div>
+      <div class="field"><label>الصلاحيات</label><div id="naPerms" style="background:#f8fafc;border-radius:10px;padding:10px">${permChecks([],"naPerms")}</div></div>
       <button class="btn">➕ إضافة المدير</button>
     </form>`;
     $("#adList").innerHTML = d.admins.map(a=>{
@@ -1093,15 +1101,18 @@ async function adminAdmins(){
       return `<div style="padding:12px;border-bottom:1px solid var(--line)">
         <div class="row-between"><div><b>${a.name}</b> <span class="badge ${a.status==='active'?'b-active':'b-banned'}">${a.status==='active'?'نشط':'موقوف'}</span><br><small class="muted">${a.email}</small></div>
           <div><button class="btn sm ${a.status==='active'?'red':'green'}" onclick="toggleAdminStatus(${a.id},'${a.status==='active'?'banned':'active'}')">${a.status==='active'?'إيقاف':'تفعيل'}</button></div></div>
-        <div id="perms-${a.id}" style="margin-top:8px;background:#f8fafc;border-radius:10px;padding:10px">${permChecks(a.permissions)}</div>
+        <div id="perms-${a.id}" style="margin-top:8px;background:#f8fafc;border-radius:10px;padding:10px">${permChecks(a.permissions,"perms-"+a.id)}</div>
         <button class="btn sm blue" style="margin-top:8px" onclick="saveAdminPerms(${a.id})">حفظ صلاحياته</button>
       </div>`;
     }).join("");
   }catch(e){ $("#adList").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
+function togglePerms(boxId, on){
+  $("#"+boxId).querySelectorAll("input[value]").forEach(c=>{ c.checked=on; });
+}
 async function addAdmin(e){
   e.preventDefault();
-  const perms=[...$("#naPerms").querySelectorAll("input:checked")].map(x=>x.value);
+  const perms=[...$("#naPerms").querySelectorAll("input[value]:checked")].map(x=>x.value);
   try{
     await api("/api/admin/add-admin",{method:"POST",body:{name:$("#naName").value,email:$("#naEmail").value,phone:$("#naPhone").value,password:$("#naPass").value,permissions:perms}});
     toast("تم إضافة المدير ✅"); adminAdmins();
@@ -1109,7 +1120,7 @@ async function addAdmin(e){
   return false;
 }
 async function saveAdminPerms(id){
-  const perms=[...$("#perms-"+id).querySelectorAll("input:checked")].map(x=>x.value);
+  const perms=[...$("#perms-"+id).querySelectorAll("input[value]:checked")].map(x=>x.value);
   try{ await api("/api/admin/update-admin",{method:"POST",body:{user_id:id,permissions:perms}}); toast("تم حفظ الصلاحيات ✅"); }
   catch(e){ toast(e.message); }
 }
