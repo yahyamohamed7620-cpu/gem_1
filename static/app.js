@@ -240,12 +240,14 @@ async function viewProduct(pid){
   if(!PRODUCTS.length){ try{ PRODUCTS=(await api("/api/products")).products; }catch(e){} }
   const p = PRODUCTS.find(x=>x.id===pid); if(!p) return;
   PM_QTY = 1; PM_PID = pid;
-  const big = isImg(p.image) ? `<img src="${p.image}" style="max-width:100%;max-height:360px;object-fit:contain">` : `<div style="font-size:160px">${p.image||"📦"}</div>`;
+  const imgs = (p.images&&p.images.length)?p.images.filter(isImg):(isImg(p.image)?[p.image]:[]);
+  const big = imgs.length ? `<img id="pvMain" src="${imgs[0]}" style="max-width:100%;max-height:360px;object-fit:contain">` : `<div style="font-size:160px">${p.image||"📦"}</div>`;
+  const thumbs = imgs.length>1 ? `<div style="display:flex;gap:8px;justify-content:center;margin-top:12px;flex-wrap:wrap">${imgs.map(u=>`<img src="${u}" onclick="document.getElementById('pvMain').src='${u}'" style="width:58px;height:58px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:pointer">`).join("")}</div>` : "";
   const offers = (p.offers||[]).map(o=>`<span class="comm" style="background:#fff3ec;color:var(--orange);font-size:14px;padding:6px 12px">${o.qty} قطعة بـ ${kd(o.price)} د.ك</span>`).join(" ");
   app.innerHTML = `<section><div class="wrap">
     <button class="btn gray sm" onclick="go('products')" style="margin-bottom:18px">◀ رجوع للمنتجات</button>
     <div class="dash" style="grid-template-columns:1fr 1fr;align-items:start">
-      <div class="panel" style="text-align:center;background:linear-gradient(135deg,#eef9f8,#fff3ec)">${big}</div>
+      <div class="panel" style="text-align:center;background:linear-gradient(135deg,#eef9f8,#fff3ec)">${big}${thumbs}</div>
       <div class="panel">
         <span class="cat" style="color:var(--muted)">${p.category||""}</span>
         <h1 style="color:var(--blue);font-size:28px;margin:6px 0 10px">${p.name}</h1>
@@ -456,13 +458,15 @@ async function submitOrder(e) {
 let ADMIN_VIEW = "orders";
 const ADMIN_MENU = [
   {v:"dashboard", perm:"orders", label:"📊 الإحصائيات"},
-  {v:"orders", perm:"orders", label:"📦 الطلبات"},
+  {v:"productstats", perm:"products", label:"📦 إحصائيات المنتجات"},
+  {v:"orders", perm:"orders", label:"📋 الطلبات"},
   {v:"pending", perm:"marketers", label:"🆕 طلبات التسجيل"},
   {v:"products", perm:"products", label:"🛍️ المنتجات"},
   {v:"groups", perm:"groups", label:"🗂️ المجموعات"},
   {v:"marketers", perm:"marketers", label:"👥 المسوّقين"},
   {v:"withdrawals", perm:"withdrawals", label:"💳 طلبات السحب"},
   {v:"admins", perm:"__owner__", label:"🛡️ المدراء والصلاحيات"},
+  {v:"backup", perm:"__owner__", label:"💾 نسخة احتياطية"},
   {v:"password", perm:"__always__", label:"🔑 كلمة المرور"},
 ];
 function allowedMenu(){ return ADMIN_MENU.filter(m => m.perm==="__owner__" ? USER.role==="owner" : (m.perm==="__always__" ? true : can(m.perm))); }
@@ -484,6 +488,7 @@ function adminView(v) {
   ADMIN_VIEW = v;
   allowedMenu().forEach(m=>{ const el=$("#av-"+m.v); if(el) el.classList.toggle("active",m.v===v); });
   if (v==="dashboard") adminDashboard();
+  if (v==="productstats") adminProductStats();
   if (v==="orders") adminOrders();
   if (v==="pending") adminPending();
   if (v==="groups") adminGroups();
@@ -491,7 +496,23 @@ function adminView(v) {
   if (v==="marketers") adminMarketers();
   if (v==="products") adminProducts();
   if (v==="admins") adminAdmins();
+  if (v==="backup") adminBackup();
   if (v==="password") adminPassword();
+}
+function adminBackup(){
+  $("#dashMain").innerHTML=`<div class="panel" style="max-width:540px"><h2>💾 نسخة احتياطية</h2>
+    <p class="muted">نزّل نسخة من كل بيانات المنصة (الحسابات، المنتجات، الطلبات، المجموعات...) على جهازك. احتفظ بيها كل فترة — دي حمايتك لو حصل أي مشكلة.</p>
+    <button class="btn" onclick="downloadBackup()">⬇️ تحميل نسخة احتياطية الآن</button></div>`;
+}
+async function downloadBackup(){
+  try{
+    const res=await fetch("/api/admin/backup",{headers:{"Authorization":"Bearer "+TOKEN}});
+    if(!res.ok){ toast("فشل التحميل"); return; }
+    const blob=await res.blob(); const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download="kuwait-market-backup-"+new Date().toISOString().slice(0,10)+".db";
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    toast("تم تحميل النسخة الاحتياطية ✅");
+  }catch(e){ toast(e.message); }
 }
 async function adminPending(){
   const m=$("#dashMain");
@@ -578,55 +599,118 @@ async function adminDashboard(){
   $("#dashMain").innerHTML = `<div class="panel"><h2 style="margin:0">📊 لوحة الإحصائيات</h2></div>`+dateFilterBar()+`<div id="dashBody"><div class="empty">...</div></div>`;
   loadAdminDash();
 }
+function dashSectionTitle(t){ return `<h3 style="color:var(--blue);margin:22px 0 10px;border-bottom:2px solid var(--line);padding-bottom:6px">${t}</h3>`; }
 async function loadAdminDash(){
   try{
     const d=await api("/api/dashboard"+dashQuery());
-    $("#dashBody").innerHTML = statCards(d.overall) + breakdownTable("حسب المجموعة", d.by_group) + breakdownTable("حسب المسوّق", d.by_marketer);
+    let html = dashSectionTitle("📈 كل المنصة") + statCards(d.overall);
+    (d.by_group||[]).forEach(g=>{ html += dashSectionTitle("🗂️ مجموعة: "+g.name) + statCards(g.stats); });
+    html += dashSectionTitle("👥 حسب المسوّق") + breakdownTable("", d.by_marketer);
+    $("#dashBody").innerHTML = html;
+  }catch(e){ $("#dashBody").innerHTML=`<div class="empty">${e.message}</div>`; }
+}
+async function adminProductStats(){
+  DASH_LOADER=loadProductStats;
+  $("#dashMain").innerHTML = `<div class="panel"><h2 style="margin:0">📦 إحصائيات المنتجات</h2></div>`+dateFilterBar()+`<div id="dashBody"><div class="empty">...</div></div>`;
+  loadProductStats();
+}
+async function loadProductStats(){
+  try{
+    const d=await api("/api/admin/product-stats"+dashQuery());
+    $("#dashBody").innerHTML = d.products.length ? `<div class="panel"><table><thead><tr><th>المنتج</th><th>عدد الأوردرات</th><th>الكمية</th><th>مؤكدة</th><th>مُسلّمة</th><th>معلّقة</th><th>مرتجعة</th><th>نسبة التسليم</th><th>نسبة المرتجع</th></tr></thead><tbody>
+      ${d.products.map(p=>`<tr><td><b>${p.name}</b></td><td>${p.total}</td><td>${p.qty}</td><td>${p.confirmed_total}</td>
+        <td style="color:var(--green)">${p.delivered}</td><td>${p.pending}</td><td style="color:#9a3412">${p.returned}</td>
+        <td><b>${p.deliver_rate}%</b></td><td><b style="color:#9a3412">${p.return_rate}%</b></td></tr>`).join("")}
+    </tbody></table></div>` : `<div class="empty">لا توجد بيانات منتجات بعد</div>`;
   }catch(e){ $("#dashBody").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
 
-let ORDER_FILTER_GROUP = "";
+let OF = {group:"",status:"",from:"",to:"",q:""};
+let OSEL = new Set();
+let ADMIN_ORDERS = [];
 async function adminOrders() {
-  const m=$("#dashMain");
-  // حمّل المجموعات للفلتر
   let groups=[]; try{ groups=(await api("/api/admin/groups")).groups; }catch(e){}
-  const opts = `<option value="">كل المجموعات</option>` +
-    groups.map(g=>`<option value="${g.id}" ${String(g.id)===ORDER_FILTER_GROUP?"selected":""}>${g.name}</option>`).join("");
-  m.innerHTML=`<div class="panel">
-    <div class="row-between" style="margin-bottom:14px">
-      <h2 style="margin:0">كل الطلبات</h2>
-      <div style="display:flex;gap:10px;align-items:center">
-        <select id="grpFilter" onchange="filterOrders(this.value)" style="padding:8px 12px;border:1.5px solid var(--line);border-radius:10px">${opts}</select>
-        <button class="btn green sm" onclick="exportOrders()">⬇️ تحميل شيت Excel</button>
-      </div>
+  $("#dashMain").innerHTML=`<div class="panel">
+    <div class="row-between" style="margin-bottom:12px"><h2 style="margin:0">الطلبات</h2>
+      <button class="btn green sm" onclick="exportOrders()">⬇️ تحميل Excel</button></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:12px">
+      <div class="field" style="margin:0;flex:1;min-width:150px"><label>بحث (اسم/هاتف)</label><input id="ofQ" value="${OF.q}" placeholder="رقم أو اسم العميل"></div>
+      <div class="field" style="margin:0"><label>الحالة</label><select id="ofStatus">${['','pending','confirmed','shipped','delivered','returned','cancelled'].map(s=>`<option value="${s}" ${s===OF.status?'selected':''}>${s===''?'كل الحالات':statusAr(s)}</option>`).join('')}</select></div>
+      <div class="field" style="margin:0"><label>المجموعة</label><select id="ofGroup"><option value="">الكل</option>${groups.map(g=>`<option value="${g.id}" ${String(g.id)===OF.group?'selected':''}>${g.name}</option>`).join('')}</select></div>
+      <div class="field" style="margin:0"><label>من</label><input type="date" id="ofFrom" value="${OF.from}"></div>
+      <div class="field" style="margin:0"><label>إلى</label><input type="date" id="ofTo" value="${OF.to}"></div>
+      <button class="btn sm" onclick="applyOrderFilter()">تطبيق</button>
+      <button class="btn gray sm" onclick="resetOrderFilter()">مسح</button>
+    </div>
+    <div id="bulkBar" style="display:none;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;background:#fff7ed;padding:10px 14px;border-radius:10px">
+      <b><span id="selCount">0</span> محدد</b> — غيّر الحالة إلى:
+      <select id="bulkStatus">${ORDER_STATUSES.map(s=>`<option value="${s}">${statusAr(s)}</option>`).join('')}</select>
+      <button class="btn sm" onclick="bulkUpdate()">تطبيق على المحدد</button>
     </div>
     <div id="aOrd">...</div></div>`;
-  try {
-    const q = ORDER_FILTER_GROUP ? "?group_id="+ORDER_FILTER_GROUP : "";
-    const d=await api("/api/admin/orders"+q);
-    $("#aOrd").innerHTML = d.orders.length ? `<table><thead><tr><th>#</th><th>المسوّق</th><th>المجموعة</th><th>العميل</th><th>التقسيمة / المنطقة</th><th>السعر</th><th>التوصيل</th><th>الإجمالي</th><th>الحالة</th><th>تغيير</th></tr></thead><tbody>
-      ${d.orders.map(o=>{const del=o.delivery||0; const grand=(o.total||0)+del; return `<tr><td>#${o.id}</td><td>${o.marketer_name}</td>
+  loadAdminOrders();
+}
+function orderFilterQuery(){ const q=[]; if(OF.q)q.push("q="+encodeURIComponent(OF.q)); if(OF.status)q.push("status="+OF.status); if(OF.group)q.push("group_id="+OF.group); if(OF.from)q.push("from="+OF.from); if(OF.to)q.push("to="+OF.to); return q.length?"?"+q.join("&"):""; }
+function applyOrderFilter(){ OF={q:$("#ofQ").value,status:$("#ofStatus").value,group:$("#ofGroup").value,from:$("#ofFrom").value,to:$("#ofTo").value}; OSEL.clear(); loadAdminOrders(); }
+function resetOrderFilter(){ OF={group:"",status:"",from:"",to:"",q:""}; OSEL.clear(); adminOrders(); }
+async function loadAdminOrders(){
+  try{
+    const d=await api("/api/admin/orders"+orderFilterQuery());
+    ADMIN_ORDERS=d.orders;
+    $("#aOrd").innerHTML = d.orders.length ? `<table><thead><tr><th><input type="checkbox" onclick="toggleAll(this.checked)"></th><th>#</th><th>المسوّق</th><th>المجموعة</th><th>العميل</th><th>المنطقة</th><th>الإجمالي</th><th>الحالة</th><th>تغيير</th><th>🖨️</th></tr></thead><tbody>
+      ${d.orders.map(o=>{const del=o.delivery||0; const grand=(o.total||0)+del; return `<tr>
+        <td><input type="checkbox" ${OSEL.has(o.id)?'checked':''} onclick="toggleSel(${o.id},this.checked)"></td>
+        <td>#${o.id}</td><td>${o.marketer_name}</td>
         <td>${o.group_name?`<span class="badge b-confirmed">${o.group_name}</span>`:'<span class="muted">—</span>'}</td>
         <td>${o.customer_name}<br><small class="muted">${o.customer_phone}</small></td>
         <td>${o.area||"—"}<br><small class="muted">${o.zone||""}</small></td>
-        <td>${kd(o.total)}</td><td>${kd(del)}</td><td style="font-weight:700;color:var(--orange)">${kd(grand)}</td>
+        <td style="font-weight:700;color:var(--orange)">${kd(grand)}</td>
         <td><span class="badge b-${o.status}">${statusAr(o.status)}</span></td>
-        <td><select onchange="updOrder(${o.id},this.value)">
-          ${ORDER_STATUSES.map(s=>`<option value="${s}" ${s===o.status?"selected":""}>${statusAr(s)}</option>`).join("")}
-        </select></td></tr>`;}).join("")}
-    </tbody></table>` : `<div class="empty">لا توجد طلبات</div>`;
-  } catch(e){ $("#aOrd").innerHTML=`<div class="empty">${e.message}</div>`; }
+        <td><select onchange="updOrder(${o.id},this.value)">${ORDER_STATUSES.map(s=>`<option value="${s}" ${s===o.status?"selected":""}>${statusAr(s)}</option>`).join("")}</select></td>
+        <td><button class="btn gray sm" onclick="printLabel(${o.id})">طباعة</button></td>
+      </tr>`;}).join("")}
+    </tbody></table>` : `<div class="empty">لا توجد طلبات مطابقة</div>`;
+    updateBulkBar();
+  }catch(e){ $("#aOrd").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
-function filterOrders(v){ ORDER_FILTER_GROUP=v; adminOrders(); }
+function toggleSel(id,ch){ if(ch)OSEL.add(id); else OSEL.delete(id); updateBulkBar(); }
+function toggleAll(ch){ if(ch)ADMIN_ORDERS.forEach(o=>OSEL.add(o.id)); else OSEL.clear(); loadAdminOrders(); }
+function updateBulkBar(){ const b=$("#bulkBar"); if(!b)return; b.style.display=OSEL.size?'flex':'none'; if($("#selCount"))$("#selCount").textContent=OSEL.size; }
+async function bulkUpdate(){
+  const status=$("#bulkStatus").value; if(!OSEL.size)return;
+  try{ const r=await api("/api/admin/bulk-update-orders",{method:"POST",body:{order_ids:[...OSEL],status}}); toast("تم تحديث "+r.count+" طلب ✅"); OSEL.clear(); loadAdminOrders(); }
+  catch(e){ toast(e.message); }
+}
+function printLabel(id){
+  const o=ADMIN_ORDERS.find(x=>x.id===id); if(!o)return;
+  const del=o.delivery||0; const grand=(o.total||0)+del;
+  const items=(o.items||[]).map(i=>`${i.product_name} × ${i.qty}`).join("<br>");
+  const w=window.open("","_blank","width=420,height=640");
+  if(!w){ toast("اسمح بالنوافذ المنبثقة للطباعة"); return; }
+  w.document.write(`<html dir="rtl"><head><meta charset="utf-8"><title>بوليصة #${o.id}</title>
+    <style>body{font-family:Tahoma,Arial;padding:16px;color:#111}.box{border:2px solid #111;border-radius:10px;padding:14px}h2{margin:0 0 10px;text-align:center;color:#142b52}.row{display:flex;justify-content:space-between;gap:10px;border-bottom:1px dashed #aaa;padding:6px 0}.big{font-size:22px;font-weight:bold;text-align:center;margin-top:12px;border:2px solid #111;border-radius:8px;padding:10px}</style></head>
+    <body><div class="box"><h2>Kuwait Market — بوليصة شحن</h2>
+    <div class="row"><span>رقم الطلب</span><b>#${o.id}</b></div>
+    <div class="row"><span>العميل</span><b>${o.customer_name}</b></div>
+    <div class="row"><span>الهاتف</span><b>${o.customer_phone}</b></div>
+    <div class="row"><span>التقسيمة</span><b>${o.zone||''}</b></div>
+    <div class="row"><span>المنطقة</span><b>${o.area||''}</b></div>
+    <div class="row"><span>العنوان</span><b style="text-align:left">${o.customer_address||''}</b></div>
+    <div class="row"><span>المنتجات</span><b style="text-align:left">${items}</b></div>
+    <div class="row"><span>قيمة المنتجات</span><b>${kd(o.total)} د.ك</b></div>
+    <div class="row"><span>التوصيل</span><b>${kd(del)} د.ك</b></div>
+    <div class="big">المطلوب تحصيله: ${kd(grand)} د.ك</div>
+    <div class="row" style="margin-top:8px"><span>المسوّق</span><b>${o.marketer_name}</b></div>
+    </div><scr`+`ipt>window.onload=function(){window.print()}</scr`+`ipt></body></html>`);
+  w.document.close();
+}
 async function exportOrders(){
   try{
-    const q = ORDER_FILTER_GROUP ? "?group_id="+ORDER_FILTER_GROUP : "";
-    const res = await fetch("/api/admin/export-orders"+q, { headers:{ "Authorization":"Bearer "+TOKEN }});
+    const res = await fetch("/api/admin/export-orders"+orderFilterQuery(), { headers:{ "Authorization":"Bearer "+TOKEN }});
     if(!res.ok){ toast("فشل التحميل"); return; }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href=url; a.download="orders.csv"; document.body.appendChild(a); a.click();
+    const a = document.createElement("a"); a.href=url; a.download="orders.csv"; document.body.appendChild(a); a.click();
     a.remove(); URL.revokeObjectURL(url);
     toast("تم تحميل الشيت ✅");
   }catch(e){ toast("فشل التحميل: "+e.message); }
@@ -724,8 +808,6 @@ async function toggleBan(id){
     toast(r.status==="banned"?"تم الحظر":"تم فك الحظر"); adminMarketers(); } catch(e){ toast(e.message); }
 }
 // ===== إدارة المنتجات =====
-let UPLOADED_IMG = null; // رابط الصورة بعد الرفع
-
 async function adminProducts(){
   const m=$("#dashMain");
   m.innerHTML=`<div class="panel">
@@ -752,24 +834,20 @@ async function adminProducts(){
   }catch(e){ $("#pList").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
 
+let UPLOADED_IMGS = [];
 function adminProductForm(p){
   const edit = !!p;
-  UPLOADED_IMG = edit ? (p.image||null) : null;
-  const preview = isImg(p?.image) ? `<img id="imgPrev" src="${p.image}" style="max-width:140px;max-height:140px;border-radius:10px;border:1px solid var(--line)">` : `<div id="imgPrev" style="width:140px;height:140px;border-radius:10px;border:2px dashed var(--line);display:grid;place-items:center;font-size:40px;color:#9ca3af">🖼️</div>`;
+  UPLOADED_IMGS = edit ? ((p.images&&p.images.length?p.images:(isImg(p.image)?[p.image]:[])).filter(isImg)) : [];
   $("#dashMain").innerHTML=`<div class="panel">
     <div class="row-between"><h2 style="margin:0">${edit?'تعديل منتج':'إضافة منتج جديد'}</h2>
       <button class="btn gray sm" onclick="adminProducts()">◀ رجوع للقائمة</button></div>
     <div id="apAlert" style="margin-top:12px"></div>
     <form onsubmit="return saveProduct(event, ${edit?p.id:'null'})" style="margin-top:12px">
-      <div class="field"><label>صورة المنتج</label>
-        <div style="display:flex;gap:16px;align-items:center">
-          ${preview}
-          <div>
-            <input type="file" id="apFile" accept="image/*" onchange="pickImage(this)" style="font-size:14px">
-            <div class="muted" style="font-size:12px;margin-top:6px">JPG / PNG — هيتصغّر تلقائيًا</div>
-            <div id="upMsg" class="muted" style="font-size:13px;margin-top:4px"></div>
-          </div>
-        </div>
+      <div class="field"><label>صور المنتج (تقدر ترفع أكتر من صورة)</label>
+        <div id="imgStrip" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px"></div>
+        <input type="file" id="apFile" accept="image/*" multiple onchange="pickImages(this)" style="font-size:14px">
+        <div class="muted" style="font-size:12px;margin-top:6px">JPG / PNG — بتتصغّر تلقائيًا. أول صورة هي الرئيسية.</div>
+        <div id="upMsg" class="muted" style="font-size:13px;margin-top:4px"></div>
       </div>
       <div class="field"><label>اسم المنتج</label><input id="apName" value="${edit?escAttr(p.name):''}" required></div>
       <div class="field"><label>الوصف</label><textarea id="apDesc" rows="2">${edit?escHtml(p.description||''):''}</textarea></div>
@@ -788,36 +866,47 @@ function adminProductForm(p){
       </div>
       <button class="btn">${edit?'حفظ التعديلات':'إضافة المنتج'}</button>
     </form></div>`;
+  renderImgStrip();
 }
 function offVal(p, q){ const o=(p.offers||[]).find(x=>Number(x.qty)===q); return o?o.price:''; }
 
 function escAttr(s){ return String(s).replace(/"/g,"&quot;"); }
 function escHtml(s){ return String(s).replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
-// تصغير الصورة في المتصفح قبل الرفع ثم رفعها
-function pickImage(input){
-  const file = input.files[0]; if(!file) return;
-  $("#upMsg").textContent="جاري رفع الصورة...";
-  const reader = new FileReader();
-  reader.onload = (ev)=>{
-    const img = new Image();
-    img.onload = async ()=>{
-      const max=800; let {width,height}=img;
-      if(width>max){ height=height*max/width; width=max; }
-      const canvas=document.createElement("canvas"); canvas.width=width; canvas.height=height;
-      canvas.getContext("2d").drawImage(img,0,0,width,height);
-      const b64 = canvas.toDataURL("image/jpeg",0.85);
-      // معاينة فورية
-      const prev=$("#imgPrev");
-      if(prev){ const ni=document.createElement("img"); ni.id="imgPrev"; ni.src=b64; ni.style.cssText="max-width:140px;max-height:140px;border-radius:10px;border:1px solid var(--line)"; prev.replaceWith(ni); }
-      try{
-        const d=await api("/api/admin/upload-image",{method:"POST",body:{data:b64,ext:"jpg"}});
-        UPLOADED_IMG=d.url; $("#upMsg").textContent="تم رفع الصورة ✅";
-      }catch(e){ $("#upMsg").textContent="فشل رفع الصورة: "+e.message; }
+function renderImgStrip(){
+  const el=$("#imgStrip"); if(!el) return;
+  el.innerHTML = UPLOADED_IMGS.length ? UPLOADED_IMGS.map((u,i)=>`<div style="position:relative;width:72px;height:72px;border-radius:8px;overflow:hidden;border:1px solid var(--line)">
+    <img src="${u}" style="width:100%;height:100%;object-fit:cover">
+    ${i===0?'<span style="position:absolute;bottom:0;right:0;background:var(--orange);color:#fff;font-size:10px;padding:1px 4px">رئيسية</span>':''}
+    <button type="button" onclick="removeImg(${i})" style="position:absolute;top:0;left:0;background:var(--red);color:#fff;border:none;width:20px;height:20px;cursor:pointer;font-size:12px;line-height:1">×</button>
+  </div>`).join("") : `<div class="muted" style="font-size:13px">لا توجد صور بعد — ارفع صورة أو أكثر</div>`;
+}
+function removeImg(i){ UPLOADED_IMGS.splice(i,1); renderImgStrip(); }
+
+// تصغير الصور في المتصفح قبل رفعها (متعددة)
+function pickImages(input){
+  const files=[...input.files]; if(!files.length) return;
+  $("#upMsg").textContent="جاري رفع الصور...";
+  let done=0;
+  files.forEach(file=>{
+    const reader=new FileReader();
+    reader.onload=(ev)=>{
+      const img=new Image();
+      img.onload=async()=>{
+        const max=800; let {width,height}=img;
+        if(width>max){ height=height*max/width; width=max; }
+        const c=document.createElement("canvas"); c.width=width; c.height=height;
+        c.getContext("2d").drawImage(img,0,0,width,height);
+        const b64=c.toDataURL("image/jpeg",0.85);
+        try{ const d=await api("/api/admin/upload-image",{method:"POST",body:{data:b64,ext:"jpg"}}); UPLOADED_IMGS.push(d.url); renderImgStrip(); }
+        catch(e){ $("#upMsg").textContent="فشل رفع صورة: "+e.message; }
+        done++; if(done===files.length) $("#upMsg").textContent="تم رفع الصور ✅";
+      };
+      img.src=ev.target.result;
     };
-    img.src=ev.target.result;
-  };
-  reader.readAsDataURL(file);
+    reader.readAsDataURL(file);
+  });
+  input.value="";
 }
 
 async function saveProduct(e, editId){
@@ -829,7 +918,7 @@ async function saveProduct(e, editId){
   });
   const body={
     name:$("#apName").value, description:$("#apDesc").value, category:$("#apCat").value,
-    image: UPLOADED_IMG || "📦",
+    images: UPLOADED_IMGS, image: UPLOADED_IMGS[0] || "📦",
     sell_price:$("#apSell").value, offers, stock:$("#apStock").value };
   const wEl=$("#apWholesale"); if(wEl) body.wholesale_price=wEl.value;
   try{

@@ -79,20 +79,30 @@ def application(environ, start_response):
         except Exception:
             return {}
 
+    # في WSGI سلسلة الاستعلام في QUERY_STRING مش في PATH_INFO
+    query = parse_qs(environ.get("QUERY_STRING", ""))
     if method == "GET":
         if path in PUBLIC_GET:
-            code, payload = PUBLIC_GET[path](shim, parse_qs(parsed.query))
+            code, payload = PUBLIC_GET[path](shim, query)
             return _json(start_response, code, payload)
         if path in AUTH_GET:
             user = current_user(shim)
             if not user:
                 return _json(start_response, 401, {"error": "سجّل الدخول أولاً"})
-            code, payload = AUTH_GET[path](shim, user, parse_qs(parsed.query))
+            code, payload = AUTH_GET[path](shim, user, query)
             if isinstance(payload, dict) and "_csv" in payload:
                 data = payload["_csv"].encode("utf-8")
                 start_response("200 OK", [
                     ("Content-Type", "text/csv; charset=utf-8"),
                     ("Content-Disposition", f'attachment; filename="{payload.get("filename", "export.csv")}"'),
+                    ("Content-Length", str(len(data))),
+                ])
+                return [data]
+            if isinstance(payload, dict) and "_bytes" in payload:
+                data = payload["_bytes"]
+                start_response("200 OK", [
+                    ("Content-Type", payload.get("ctype", "application/octet-stream")),
+                    ("Content-Disposition", f'attachment; filename="{payload.get("filename", "file")}"'),
                     ("Content-Length", str(len(data))),
                 ])
                 return [data]

@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS products (
     wholesale_price REAL NOT NULL DEFAULT 0,  -- سعر الجملة (للأدمن فقط)
     sell_price      REAL NOT NULL DEFAULT 0,  -- سعر البيع (يظهر للمسوّق)
     offers          TEXT NOT NULL DEFAULT '[]', -- عروض الكمية JSON: [{qty,price}]
+    images          TEXT NOT NULL DEFAULT '[]', -- صور المنتج (JSON list)
     stock        INTEGER NOT NULL DEFAULT 100,
     active       INTEGER NOT NULL DEFAULT 1,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -154,6 +155,7 @@ def migrate(conn):
     add("products", "wholesale_price", "REAL NOT NULL DEFAULT 0")
     add("products", "sell_price", "REAL NOT NULL DEFAULT 0")
     add("products", "offers", "TEXT NOT NULL DEFAULT '[]'")
+    add("products", "images", "TEXT NOT NULL DEFAULT '[]'")
     add("order_items", "wholesale", "REAL NOT NULL DEFAULT 0")
     add("groups", "leader_id", "INTEGER")
 

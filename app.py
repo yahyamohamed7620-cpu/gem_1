@@ -164,11 +164,21 @@ def _offers_of(r):
         return []
 
 
+def _images_of(r):
+    try:
+        imgs = json.loads(r["images"] or "[]")
+    except Exception:
+        imgs = []
+    if not imgs and r["image"]:
+        imgs = [r["image"]]
+    return imgs
+
+
 def public_product(r):
     """نسخة المنتج اللي يشوفها المسوّق/الزائر — بدون سعر الجملة."""
     return {"id": r["id"], "name": r["name"], "description": r["description"],
-            "category": r["category"], "image": r["image"], "sell_price": r["sell_price"],
-            "offers": _offers_of(r), "stock": r["stock"], "active": r["active"]}
+            "category": r["category"], "image": r["image"], "images": _images_of(r),
+            "sell_price": r["sell_price"], "offers": _offers_of(r), "stock": r["stock"], "active": r["active"]}
 
 
 def api_products(handler, qs):
@@ -350,33 +360,127 @@ def has_perm(user, key):
 
 
 def api_admin_orders(handler, user, qs=None):
-    group_id = None
-    if qs and qs.get("group_id"):
+    qs = qs or {}
+    def g1(k):
+        v = qs.get(k)
+        return v[0] if v else None
+    where, params = [], []
+    if g1("group_id"):
         try:
-            group_id = int(qs["group_id"][0])
+            where.append("o.group_id=?")
+            params.append(int(g1("group_id")))
         except (ValueError, TypeError):
-            group_id = None
+            pass
+    if g1("status"):
+        where.append("o.status=?")
+        params.append(g1("status"))
+    if g1("from"):
+        where.append("date(o.created_at) >= date(?)")
+        params.append(g1("from"))
+    if g1("to"):
+        where.append("date(o.created_at) <= date(?)")
+        params.append(g1("to"))
+    if g1("q"):
+        where.append("(o.customer_phone LIKE ? OR o.customer_name LIKE ?)")
+        like = "%" + g1("q") + "%"
+        params += [like, like]
     conn = get_conn()
     base = """SELECT o.*, u.name AS marketer_name, g.name AS group_name
              FROM orders o
              JOIN users u ON u.id=o.marketer_id
              LEFT JOIN groups g ON g.id=o.group_id"""
-    if group_id:
-        rows = conn.execute(base + " WHERE o.group_id=? ORDER BY o.id DESC", (group_id,)).fetchall()
-    else:
-        rows = conn.execute(base + " ORDER BY o.id DESC").fetchall()
+    wsql = (" WHERE " + " AND ".join(where)) if where else ""
+    rows = conn.execute(base + wsql + " ORDER BY o.id DESC", params).fetchall()
+    orders = []
+    for r in rows:
+        o = row_to_dict(r)
+        items = conn.execute("SELECT product_name, qty, sell_price FROM order_items WHERE order_id=?", (r["id"],)).fetchall()
+        o["items"] = [row_to_dict(i) for i in items]
+        orders.append(o)
     conn.close()
-    return 200, {"orders": [row_to_dict(r) for r in rows]}
+    return 200, {"orders": orders}
+
+
+def api_admin_bulk_update(handler, user, body):
+    ids = body.get("order_ids") or []
+    status = body.get("status")
+    if status not in {"pending", "confirmed", "shipped", "delivered", "cancelled", "returned"}:
+        return 400, {"error": "حالة غير صحيحة"}
+    conn = get_conn()
+    for oid in ids:
+        conn.execute("UPDATE orders SET status=? WHERE id=?", (status, oid))
+    conn.commit()
+    conn.close()
+    return 200, {"ok": True, "count": len(ids)}
+
+
+def api_product_stats(handler, user, qs):
+    qs = qs or {}
+    frm = (qs.get("from") or [None])[0]
+    to = (qs.get("to") or [None])[0]
+    where, params = [], []
+    if frm:
+        where.append("date(o.created_at) >= date(?)")
+        params.append(frm)
+    if to:
+        where.append("date(o.created_at) <= date(?)")
+        params.append(to)
+    wsql = (" WHERE " + " AND ".join(where)) if where else ""
+    conn = get_conn()
+    rows = conn.execute(
+        f"""SELECT oi.product_id, oi.product_name, o.status, o.id AS oid, oi.qty
+            FROM order_items oi JOIN orders o ON o.id=oi.order_id{wsql}""", params
+    ).fetchall()
+    conn.close()
+    prod = {}
+    for r in rows:
+        p = prod.setdefault(r["product_id"], {"name": r["product_name"], "orders": set(), "qty": 0, "by_status": {}})
+        p["orders"].add(r["oid"])
+        p["qty"] += r["qty"] or 0
+        p["by_status"].setdefault(r["status"], set()).add(r["oid"])
+    out = []
+    for pid, p in prod.items():
+        def cnt(s):
+            return len(p["by_status"].get(s, set()))
+        total = len(p["orders"])
+        confirmed_total = cnt("confirmed") + cnt("shipped") + cnt("delivered") + cnt("returned")
+        delivered, returned = cnt("delivered"), cnt("returned")
+        def rate(a, b):
+            return round(100.0 * a / b, 1) if b else 0.0
+        out.append({"product_id": pid, "name": p["name"], "total": total, "qty": p["qty"],
+                    "pending": cnt("pending"), "confirmed_total": confirmed_total, "delivered": delivered,
+                    "returned": returned, "cancelled": cnt("cancelled"),
+                    "deliver_rate": rate(delivered, confirmed_total), "return_rate": rate(returned, confirmed_total)})
+    out.sort(key=lambda x: -x["total"])
+    return 200, {"products": out}
 
 
 def api_admin_export_orders(handler, user, qs=None):
-    """تصدير الأوردرات كـ CSV (يفتح على Excel). فلتر اختياري بالمجموعة."""
-    group_id = None
-    if qs and qs.get("group_id"):
+    """تصدير الأوردرات كـ CSV (يفتح على Excel) — بنفس فلاتر صفحة الطلبات."""
+    qs = qs or {}
+    def g1(k):
+        v = qs.get(k)
+        return v[0] if v else None
+    where, params = [], []
+    if g1("group_id"):
         try:
-            group_id = int(qs["group_id"][0])
+            where.append("o.group_id=?")
+            params.append(int(g1("group_id")))
         except (ValueError, TypeError):
-            group_id = None
+            pass
+    if g1("status"):
+        where.append("o.status=?")
+        params.append(g1("status"))
+    if g1("from"):
+        where.append("date(o.created_at) >= date(?)")
+        params.append(g1("from"))
+    if g1("to"):
+        where.append("date(o.created_at) <= date(?)")
+        params.append(g1("to"))
+    if g1("q"):
+        where.append("(o.customer_phone LIKE ? OR o.customer_name LIKE ?)")
+        like = "%" + g1("q") + "%"
+        params += [like, like]
     conn = get_conn()
     base = """SELECT o.id, o.created_at, u.name AS marketer_name, g.name AS group_name,
                      o.customer_name, o.customer_phone, o.zone, o.area, o.customer_address,
@@ -384,10 +488,8 @@ def api_admin_export_orders(handler, user, qs=None):
               FROM orders o
               JOIN users u ON u.id=o.marketer_id
               LEFT JOIN groups g ON g.id=o.group_id"""
-    if group_id:
-        rows = conn.execute(base + " WHERE o.group_id=? ORDER BY o.id DESC", (group_id,)).fetchall()
-    else:
-        rows = conn.execute(base + " ORDER BY o.id DESC").fetchall()
+    wsql = (" WHERE " + " AND ".join(where)) if where else ""
+    rows = conn.execute(base + wsql + " ORDER BY o.id DESC", params).fetchall()
     # عناصر كل أوردر كنص واحد
     items_map = {}
     for r in rows:
@@ -646,13 +748,20 @@ def _clean_offers(raw):
     return json.dumps(out, ensure_ascii=False)
 
 
+def _clean_images(raw):
+    imgs = [u for u in (raw or []) if isinstance(u, str) and u]
+    return json.dumps(imgs, ensure_ascii=False)
+
+
 def api_admin_add_product(handler, user, body):
     try:
+        imgs = [u for u in (body.get("images") or []) if isinstance(u, str) and u]
+        main = imgs[0] if imgs else (body.get("image") or "📦")
         conn = get_conn()
         conn.execute(
-            """INSERT INTO products (name,description,category,image,wholesale_price,sell_price,offers,stock)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (body["name"], body.get("description", ""), body.get("category", ""), body.get("image") or "📦",
+            """INSERT INTO products (name,description,category,image,images,wholesale_price,sell_price,offers,stock)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (body["name"], body.get("description", ""), body.get("category", ""), main, _clean_images(imgs),
              float(body["wholesale_price"]), float(body["sell_price"]),
              _clean_offers(body.get("offers")), int(body.get("stock", 100))),
         )
@@ -671,8 +780,8 @@ def api_admin_products(handler, user):
     out = []
     for r in rows:
         d = {"id": r["id"], "name": r["name"], "description": r["description"],
-             "category": r["category"], "image": r["image"], "sell_price": r["sell_price"],
-             "offers": _offers_of(r), "stock": r["stock"], "active": r["active"]}
+             "category": r["category"], "image": r["image"], "images": _images_of(r),
+             "sell_price": r["sell_price"], "offers": _offers_of(r), "stock": r["stock"], "active": r["active"]}
         if show_wholesale:
             d["wholesale_price"] = r["wholesale_price"]
         out.append(d)
@@ -691,11 +800,13 @@ def api_admin_update_product(handler, user, body):
         else:
             cur = conn.execute("SELECT wholesale_price FROM products WHERE id=?", (pid,)).fetchone()
             wholesale = cur["wholesale_price"] if cur else 0
+        imgs = [u for u in (body.get("images") or []) if isinstance(u, str) and u]
+        main = imgs[0] if imgs else (body.get("image") or "📦")
         conn.execute(
-            """UPDATE products SET name=?, description=?, category=?, image=?,
+            """UPDATE products SET name=?, description=?, category=?, image=?, images=?,
                    wholesale_price=?, sell_price=?, offers=?, stock=?
                WHERE id=?""",
-            (body["name"], body.get("description", ""), body.get("category", ""), body.get("image") or "📦",
+            (body["name"], body.get("description", ""), body.get("category", ""), main, _clean_images(imgs),
              wholesale, float(body["sell_price"]), _clean_offers(body.get("offers")),
              int(body.get("stock", 100)), pid),
         )
@@ -750,6 +861,14 @@ def api_admin_toggle_ban(handler, user, body):
 # ------------------------- التوجيه (Routing) -------------------------
 PUBLIC_POST = {"/api/register": api_register, "/api/login": api_login}
 PUBLIC_GET = {"/api/cities": api_cities}
+
+def api_admin_backup(handler, user, qs):
+    """تنزيل نسخة احتياطية من قاعدة البيانات (للمالك)."""
+    from db import DB_PATH
+    with open(DB_PATH, "rb") as f:
+        data = f.read()
+    return 200, {"_bytes": data, "filename": "kuwait-market-backup.db", "ctype": "application/octet-stream"}
+
 
 def api_admin_list_admins(handler, user):
     conn = get_conn()
@@ -825,6 +944,8 @@ AUTH_GET = {
     "/api/admin/products": lambda h, u, q: api_admin_products(h, u) if has_perm(u, "products") else _DENY,
     "/api/admin/admins": lambda h, u, q: api_admin_list_admins(h, u) if require_owner(u) else _DENY,
     "/api/admin/pending": lambda h, u, q: api_admin_pending(h, u) if has_perm(u, "marketers") else _DENY,
+    "/api/admin/product-stats": lambda h, u, q: api_product_stats(h, u, q) if has_perm(u, "products") else _DENY,
+    "/api/admin/backup": lambda h, u, q: api_admin_backup(h, u, q) if require_owner(u) else _DENY,
 }
 AUTH_POST = {
     "/api/logout": api_logout,
@@ -844,6 +965,7 @@ AUTH_POST = {
     "/api/admin/toggle-product": lambda h, u, b: api_admin_toggle_product(h, u, b) if has_perm(u, "products") else _DENY,
     "/api/admin/add-admin": lambda h, u, b: api_admin_add_admin(h, u, b) if require_owner(u) else _DENY,
     "/api/admin/update-admin": lambda h, u, b: api_admin_update_admin(h, u, b) if require_owner(u) else _DENY,
+    "/api/admin/bulk-update-orders": lambda h, u, b: api_admin_bulk_update(h, u, b) if has_perm(u, "orders") else _DENY,
 }
 
 # المعالِجات اللي بتاخد body
@@ -863,6 +985,14 @@ class Handler(BaseHTTPRequestHandler):
         data = text.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_bytes(self, data, filename, ctype):
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -920,6 +1050,8 @@ class Handler(BaseHTTPRequestHandler):
             code, payload = AUTH_GET[path](self, user, parse_qs(parsed.query))
             if isinstance(payload, dict) and "_csv" in payload:
                 return self._send_csv(payload["_csv"], payload.get("filename", "export.csv"))
+            if isinstance(payload, dict) and "_bytes" in payload:
+                return self._send_bytes(payload["_bytes"], payload.get("filename", "file"), payload.get("ctype", "application/octet-stream"))
             return self._send(code, payload)
 
         # ملفات ثابتة
