@@ -43,6 +43,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS groups (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT UNIQUE NOT NULL,
+    leader_id   INTEGER,                 -- قائد المجموعة (يشوف كل أرقامها)
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -154,6 +155,7 @@ def migrate(conn):
     add("products", "sell_price", "REAL NOT NULL DEFAULT 0")
     add("products", "offers", "TEXT NOT NULL DEFAULT '[]'")
     add("order_items", "wholesale", "REAL NOT NULL DEFAULT 0")
+    add("groups", "leader_id", "INTEGER")
 
     # تعبئة التسعير الجديد للمنتجات القديمة من الحقول القديمة
     conn.execute("UPDATE products SET sell_price=min_price WHERE sell_price=0 AND min_price>0")

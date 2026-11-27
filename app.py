@@ -400,7 +400,7 @@ def api_admin_export_orders(handler, user, qs=None):
     w.writerow(["رقم الطلب", "التاريخ", "المسوّق", "المجموعة", "اسم العميل", "هاتف العميل",
                 "التقسيمة", "المنطقة", "العنوان", "المنتجات", "السعر", "التوصيل", "الإجمالي", "الحالة"])
     status_ar = {"pending": "قيد الانتظار", "confirmed": "مؤكد", "shipped": "قيد الشحن",
-                 "delivered": "تم التسليم", "cancelled": "ملغي"}
+                 "delivered": "تم التسليم", "cancelled": "ملغي", "returned": "مرتجع"}
     for r in rows:
         price = r["total"] or 0
         delivery = r["delivery"] or 0
@@ -417,11 +417,113 @@ def api_admin_export_orders(handler, user, qs=None):
 def api_admin_groups(handler, user):
     conn = get_conn()
     rows = conn.execute(
-        """SELECT g.*, (SELECT COUNT(*) FROM users u WHERE u.group_id=g.id) AS members
+        """SELECT g.*, (SELECT COUNT(*) FROM users u WHERE u.group_id=g.id) AS members,
+                  (SELECT name FROM users lu WHERE lu.id=g.leader_id) AS leader_name
            FROM groups g ORDER BY g.id DESC"""
     ).fetchall()
+    # أعضاء كل مجموعة (لاختيار القائد)
+    members = conn.execute("SELECT id,name,group_id FROM users WHERE role='marketer' AND group_id IS NOT NULL").fetchall()
     conn.close()
-    return 200, {"groups": [row_to_dict(r) for r in rows]}
+    mmap = {}
+    for m in members:
+        mmap.setdefault(m["group_id"], []).append({"id": m["id"], "name": m["name"]})
+    out = []
+    for r in rows:
+        d = row_to_dict(r)
+        d["member_list"] = mmap.get(r["id"], [])
+        out.append(d)
+    return 200, {"groups": out}
+
+
+def api_admin_set_leader(handler, user, body):
+    gid = body.get("group_id")
+    uid = body.get("user_id")
+    conn = get_conn()
+    if uid:
+        m = conn.execute("SELECT id FROM users WHERE id=? AND role='marketer' AND group_id=?", (uid, gid)).fetchone()
+        if not m:
+            conn.close()
+            return 400, {"error": "لازم تختار عضو من نفس المجموعة"}
+    conn.execute("UPDATE groups SET leader_id=? WHERE id=?", (uid or None, gid))
+    conn.commit()
+    conn.close()
+    return 200, {"ok": True}
+
+
+# ------------------------- لوحة الإحصائيات -------------------------
+def _stats_from(rows):
+    total = len(rows)
+    def c(s):
+        return sum(1 for r in rows if r["status"] == s)
+    confirmed, shipped, delivered, returned = c("confirmed"), c("shipped"), c("delivered"), c("returned")
+    confirmed_total = confirmed + shipped + delivered + returned
+    sales = sum((r["total"] or 0) + (r["delivery"] or 0) for r in rows if r["status"] == "delivered")
+    def rate(a, b):
+        return round(100.0 * a / b, 1) if b else 0.0
+    return {
+        "total": total, "pending": c("pending"), "confirmed": confirmed, "shipped": shipped,
+        "delivered": delivered, "cancelled": c("cancelled"), "returned": returned,
+        "confirmed_total": confirmed_total,
+        "confirm_rate": rate(confirmed_total, total),
+        "deliver_rate": rate(delivered, confirmed_total),
+        "return_rate": rate(returned, confirmed_total),
+        "sales": round(sales, 3),
+    }
+
+
+def api_dashboard(handler, user, qs):
+    qs = qs or {}
+    frm = (qs.get("from") or [None])[0]
+    to = (qs.get("to") or [None])[0]
+    conn = get_conn()
+    where, params = [], []
+    if frm:
+        where.append("date(o.created_at) >= date(?)")
+        params.append(frm)
+    if to:
+        where.append("date(o.created_at) <= date(?)")
+        params.append(to)
+
+    scope = "admin"
+    if user["role"] == "marketer":
+        g = conn.execute("SELECT id FROM groups WHERE leader_id=?", (user["id"],)).fetchone()
+        if g:
+            scope = "leader"
+            where.append("o.group_id=?")
+            params.append(g["id"])
+        else:
+            scope = "member"
+            where.append("o.marketer_id=?")
+            params.append(user["id"])
+    else:
+        if not has_perm(user, "orders"):
+            conn.close()
+            return 403, {"error": "ممنوع"}
+
+    wsql = (" WHERE " + " AND ".join(where)) if where else ""
+    rows = conn.execute(
+        f"SELECT o.status,o.total,o.delivery,o.group_id,o.marketer_id FROM orders o{wsql}", params
+    ).fetchall()
+    result = {"scope": scope, "overall": _stats_from(rows)}
+
+    if scope in ("admin", "leader"):
+        marketers = {m["id"]: m["name"] for m in conn.execute("SELECT id,name FROM users WHERE role='marketer'").fetchall()}
+        bym = {}
+        for r in rows:
+            bym.setdefault(r["marketer_id"], []).append(r)
+        result["by_marketer"] = sorted(
+            [{"name": marketers.get(mid, "?"), "stats": _stats_from(rs)} for mid, rs in bym.items()],
+            key=lambda x: -x["stats"]["total"])
+    if scope == "admin":
+        groups = {g["id"]: g["name"] for g in conn.execute("SELECT id,name FROM groups").fetchall()}
+        byg = {}
+        for r in rows:
+            byg.setdefault(r["group_id"], []).append(r)
+        result["by_group"] = sorted(
+            [{"name": (groups.get(gid) if gid else "بدون مجموعة"), "stats": _stats_from(rs)} for gid, rs in byg.items()],
+            key=lambda x: -x["stats"]["total"])
+    conn.close()
+    return 200, result
 
 
 def api_admin_add_group(handler, user, body):
@@ -454,7 +556,7 @@ def api_admin_update_order(handler, user, body):
     """تحديث حالة الطلب. لما يبقى delivered بتتسجّل العمولة في رصيد المسوق."""
     oid = body.get("order_id")
     status = body.get("status")
-    valid = {"pending", "confirmed", "shipped", "delivered", "cancelled"}
+    valid = {"pending", "confirmed", "shipped", "delivered", "cancelled", "returned"}
     if status not in valid:
         return 400, {"error": "حالة غير صحيحة"}
     conn = get_conn()
@@ -711,6 +813,7 @@ _DENY = (403, {"error": "ممنوع"})
 AUTH_GET = {
     "/api/me": lambda h, u, q: api_me(h, u),
     "/api/products": lambda h, u, q: api_products(h, q),
+    "/api/dashboard": lambda h, u, q: api_dashboard(h, u, q),
     "/api/my-orders": lambda h, u, q: api_my_orders(h, u),
     "/api/stats": lambda h, u, q: api_stats(h, u),
     "/api/my-withdrawals": lambda h, u, q: api_my_withdrawals(h, u),
@@ -735,6 +838,7 @@ AUTH_POST = {
     "/api/admin/toggle-ban": lambda h, u, b: api_admin_toggle_ban(h, u, b) if has_perm(u, "marketers") else _DENY,
     "/api/admin/add-group": lambda h, u, b: api_admin_add_group(h, u, b) if has_perm(u, "groups") else _DENY,
     "/api/admin/assign-group": lambda h, u, b: api_admin_assign_group(h, u, b) if (has_perm(u, "groups") or has_perm(u, "marketers")) else _DENY,
+    "/api/admin/set-leader": lambda h, u, b: api_admin_set_leader(h, u, b) if has_perm(u, "groups") else _DENY,
     "/api/admin/upload-image": lambda h, u, b: api_admin_upload_image(h, u, b) if has_perm(u, "products") else _DENY,
     "/api/admin/update-product": lambda h, u, b: api_admin_update_product(h, u, b) if has_perm(u, "products") else _DENY,
     "/api/admin/toggle-product": lambda h, u, b: api_admin_toggle_product(h, u, b) if has_perm(u, "products") else _DENY,

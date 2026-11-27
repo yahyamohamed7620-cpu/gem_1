@@ -116,6 +116,7 @@ th{color:var(--muted);font-weight:700;font-size:13px}
 .b-shipped{background:#e0e7ff;color:#3730a3}
 .b-delivered{background:#dcfce7;color:#166534}
 .b-cancelled,.b-rejected{background:#fee2e2;color:#991b1b}
+.b-returned{background:#ffedd5;color:#9a3412}
 .b-paid{background:#dcfce7;color:#166534}
 .b-active{background:#dcfce7;color:#166534}
 .b-banned{background:#fee2e2;color:#991b1b}

@@ -216,7 +216,7 @@ function isImg(v){ return v && (v.indexOf("/uploads/")===0 || v.indexOf("http")=
 function thumbInner(p){ return isImg(p.image) ? `<img src="${p.image}" alt="${p.name}" style="max-width:100%;max-height:150px;object-fit:contain">` : (p.image||"📦"); }
 function productCard(p) {
   const offers = (p.offers||[]).map(o=>`<span class="comm" style="background:#fff3ec;color:var(--orange)">${o.qty} بـ ${kd(o.price)}</span>`).join(" ");
-  return `<div class="product" style="cursor:pointer" onclick="openProduct(${p.id})">
+  return `<div class="product" style="cursor:pointer" onclick="viewProduct(${p.id})">
     <div class="thumb">${thumbInner(p)}</div>
     <div class="body">
       <span class="cat">${p.category || ""}</span>
@@ -230,44 +230,56 @@ function productCard(p) {
   </div>`;
 }
 
-// ===== نافذة تفاصيل المنتج =====
+// ===== صفحة تفاصيل المنتج =====
 let PM_QTY = 1;
 let PM_PID = null;
-function openProduct(pid){
+async function viewProduct(pid){
+  if (!USER) { openAuth("login"); return; }
+  window.scrollTo(0,0);
+  // اتأكد إن المنتجات محمّلة
+  if(!PRODUCTS.length){ try{ PRODUCTS=(await api("/api/products")).products; }catch(e){} }
   const p = PRODUCTS.find(x=>x.id===pid); if(!p) return;
   PM_QTY = 1; PM_PID = pid;
-  const big = isImg(p.image) ? `<img src="${p.image}" style="max-width:100%;max-height:260px;object-fit:contain">` : `<div style="font-size:120px">${p.image||"📦"}</div>`;
-  const offers = (p.offers||[]).map(o=>`<span class="comm" style="background:#fff3ec;color:var(--orange)">${o.qty} قطعة بـ ${kd(o.price)} د.ك</span>`).join(" ");
-  $("#productModalBody").innerHTML = `
-    <button class="x" onclick="closeProduct()">×</button>
-    <div style="text-align:center;background:linear-gradient(135deg,#eef9f8,#fff3ec);border-radius:14px;padding:20px;margin-bottom:14px">${big}</div>
-    <span class="cat" style="color:var(--muted)">${p.category||""}</span>
-    <h2 style="color:var(--text);margin:4px 0 8px">${p.name}</h2>
-    <p class="muted" style="margin-bottom:10px">${p.description||""}</p>
-    <div class="price" style="font-size:24px;margin-bottom:10px">${kd(p.sell_price)} د.ك</div>
-    ${offers?`<div style="margin-bottom:12px"><b style="font-size:14px">🎁 عروض الكمية:</b><br><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${offers}</div></div>`:""}
-    <div class="row-between" style="margin:14px 0">
-      <span>الكمية</span>
-      <div class="qty"><button type="button" onclick="pmQty(-1)">−</button><span id="pmQtyVal">1</span><button type="button" onclick="pmQty(1)">+</button></div>
-      <span>السعر: <b id="pmLine" style="color:var(--orange)">${kd(p.sell_price)}</b> د.ك</span>
+  const big = isImg(p.image) ? `<img src="${p.image}" style="max-width:100%;max-height:360px;object-fit:contain">` : `<div style="font-size:160px">${p.image||"📦"}</div>`;
+  const offers = (p.offers||[]).map(o=>`<span class="comm" style="background:#fff3ec;color:var(--orange);font-size:14px;padding:6px 12px">${o.qty} قطعة بـ ${kd(o.price)} د.ك</span>`).join(" ");
+  app.innerHTML = `<section><div class="wrap">
+    <button class="btn gray sm" onclick="go('products')" style="margin-bottom:18px">◀ رجوع للمنتجات</button>
+    <div class="dash" style="grid-template-columns:1fr 1fr;align-items:start">
+      <div class="panel" style="text-align:center;background:linear-gradient(135deg,#eef9f8,#fff3ec)">${big}</div>
+      <div class="panel">
+        <span class="cat" style="color:var(--muted)">${p.category||""}</span>
+        <h1 style="color:var(--blue);font-size:28px;margin:6px 0 10px">${p.name}</h1>
+        <p class="muted" style="margin-bottom:14px">${p.description||""}</p>
+        <div class="price" style="font-size:30px;margin-bottom:14px">${kd(p.sell_price)} د.ك</div>
+        ${offers?`<div style="margin-bottom:16px"><b>🎁 عروض الكمية:</b><br><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${offers}</div></div>`:""}
+        <div class="row-between" style="margin:18px 0;padding:14px;background:#f8fafc;border-radius:12px">
+          <span>الكمية</span>
+          <div class="qty"><button type="button" onclick="pmQty(-1)">−</button><span id="pmQtyVal">1</span><button type="button" onclick="pmQty(1)">+</button></div>
+          <span>السعر: <b id="pmLine" style="color:var(--orange)">${kd(p.sell_price)}</b> د.ك</span>
+        </div>
+        <div style="display:flex;gap:12px">
+          <button class="btn ghost" style="flex:1;justify-content:center" onclick="addProductPage(${p.id},false)">أضف إلى السلة 🛒</button>
+          <button class="btn green" style="flex:1;justify-content:center" onclick="addProductPage(${p.id},true)">إتمام الطلب ⚡</button>
+        </div>
+      </div>
     </div>
-    <button class="btn" style="width:100%;justify-content:center" onclick="addProductFromModal(${p.id})">أضف إلى السلة 🛒</button>`;
-  $("#productModal").classList.add("show");
+  </div></section>`;
+  renderFooter();
 }
-function closeProduct(){ $("#productModal").classList.remove("show"); }
 function pmQty(d){
   PM_QTY = Math.max(1, PM_QTY + d);
   const p = PRODUCTS.find(x=>x.id===PM_PID);
   $("#pmQtyVal").textContent = PM_QTY;
   if(p) $("#pmLine").textContent = kd(linePrice(p, PM_QTY));
 }
-function addProductFromModal(pid){
+function addProductPage(pid, checkout){
   if (!USER) { openAuth("login"); return; }
   if (isAdminRole()) { toast("الأدمن مايعملش طلبات"); return; }
   const p = PRODUCTS.find(x=>x.id===pid);
   CART[pid] = { product: p, qty: PM_QTY };
-  updateCartCount(); closeProduct();
+  updateCartCount();
   toast(`تمت إضافة ${PM_QTY} للسلة 🛒`);
+  if(checkout) openOrder();
 }
 
 /* ================= لوحة المسوّق ================= */
@@ -298,22 +310,18 @@ function dashView(v) {
   if (v === "password") $("#dashMain").innerHTML = passwordFormHTML();
 }
 async function dashOverview() {
-  const m = $("#dashMain");
-  m.innerHTML = `<div class="cards"><div class="empty">...</div></div>`;
-  try {
-    const s = await api("/api/stats");
-    m.innerHTML = `
-    <div class="cards">
-      <div class="kpi"><small>إجمالي الطلبات</small><b>${s.total_orders}</b></div>
-      <div class="kpi green"><small>طلبات تم تسليمها</small><b>${s.delivered}</b></div>
-      <div class="kpi orange"><small>عمولة معلّقة</small><b>${kd(s.pending_commission)}</b></div>
-      <div class="kpi green"><small>الرصيد القابل للسحب</small><b>${kd(s.balance)} د.ك</b></div>
-    </div>
-    <div class="panel">
-      <div class="row-between"><h2>ابدأ بيعة جديدة</h2><button class="btn" onclick="openOrder()">➕ طلب جديد</button></div>
-      <p class="muted">إجمالي ما كسبته منذ البداية: <b style="color:var(--green)">${kd(s.total_earned)} د.ك</b></p>
-    </div>`;
-  } catch (e) { m.innerHTML = `<div class="empty">${e.message}</div>`; }
+  DASH_LOADER = loadMarketerDash;
+  $("#dashMain").innerHTML = `<div class="panel"><div class="row-between"><h2 style="margin:0">📊 لوحتي</h2><button class="btn sm" onclick="openOrder()">➕ طلب جديد</button></div></div>`
+    + dateFilterBar() + `<div id="dashBody"><div class="empty">...</div></div>`;
+  loadMarketerDash();
+}
+async function loadMarketerDash(){
+  try{
+    const d = await api("/api/dashboard"+dashQuery());
+    let html = statCards(d.overall);
+    if(d.scope==="leader") html += breakdownTable("أعضاء المجموعة", d.by_marketer);
+    $("#dashBody").innerHTML = html;
+  }catch(e){ $("#dashBody").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
 async function dashOrders() {
   const m = $("#dashMain");
@@ -447,6 +455,7 @@ async function submitOrder(e) {
 /* ================= لوحة الأدمن ================= */
 let ADMIN_VIEW = "orders";
 const ADMIN_MENU = [
+  {v:"dashboard", perm:"orders", label:"📊 الإحصائيات"},
   {v:"orders", perm:"orders", label:"📦 الطلبات"},
   {v:"pending", perm:"marketers", label:"🆕 طلبات التسجيل"},
   {v:"products", perm:"products", label:"🛍️ المنتجات"},
@@ -474,6 +483,7 @@ function renderAdmin() {
 function adminView(v) {
   ADMIN_VIEW = v;
   allowedMenu().forEach(m=>{ const el=$("#av-"+m.v); if(el) el.classList.toggle("active",m.v===v); });
+  if (v==="dashboard") adminDashboard();
   if (v==="orders") adminOrders();
   if (v==="pending") adminPending();
   if (v==="groups") adminGroups();
@@ -521,6 +531,60 @@ async function changePassword(e){
   }catch(err){ $("#pwAlert").innerHTML=`<div class="alert err">${err.message}</div>`; }
   return false;
 }
+// ===== لوحة الإحصائيات (مشتركة) =====
+let DASH_FROM="", DASH_TO="", DASH_LOADER=null;
+function dateFilterBar(){
+  return `<div class="panel" style="padding:14px 18px"><div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
+    <div class="field" style="margin:0"><label>من تاريخ</label><input type="date" id="dFrom" value="${DASH_FROM}"></div>
+    <div class="field" style="margin:0"><label>إلى تاريخ</label><input type="date" id="dTo" value="${DASH_TO}"></div>
+    <button class="btn sm" onclick="applyDash()">تطبيق</button>
+    <button class="btn gray sm" onclick="resetDash()">كل الفترات</button>
+  </div></div>`;
+}
+function applyDash(){ DASH_FROM=$("#dFrom").value||""; DASH_TO=$("#dTo").value||""; if(DASH_LOADER)DASH_LOADER(); }
+function resetDash(){ DASH_FROM=""; DASH_TO=""; if($("#dFrom"))$("#dFrom").value=""; if($("#dTo"))$("#dTo").value=""; if(DASH_LOADER)DASH_LOADER(); }
+function dashQuery(){ const q=[]; if(DASH_FROM)q.push("from="+DASH_FROM); if(DASH_TO)q.push("to="+DASH_TO); return q.length?"?"+q.join("&"):""; }
+function rateBar(label,pct,color){
+  return `<div style="margin-bottom:12px"><div class="row-between" style="margin-bottom:4px"><span>${label}</span><b>${pct}%</b></div>
+    <div style="height:10px;background:#eef2f7;border-radius:6px;overflow:hidden"><div style="height:100%;width:${Math.min(100,pct)}%;background:${color};transition:.3s"></div></div></div>`;
+}
+function statCards(s){
+  return `<div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+    <div class="kpi"><small>إجمالي الأوردرات</small><b>${s.total}</b></div>
+    <div class="kpi"><small>قيد الانتظار</small><b>${s.pending}</b></div>
+    <div class="kpi orange"><small>مؤكدة</small><b>${s.confirmed_total}</b></div>
+    <div class="kpi green"><small>تم التسليم</small><b>${s.delivered}</b></div>
+    <div class="kpi"><small>مرتجعة</small><b style="color:#9a3412">${s.returned}</b></div>
+    <div class="kpi"><small>ملغية</small><b style="color:var(--red)">${s.cancelled}</b></div>
+    <div class="kpi green"><small>إجمالي المبيعات (مُسلّمة)</small><b>${kd(s.sales)} د.ك</b></div>
+  </div>
+  <div class="panel"><h3 style="color:var(--blue);margin-bottom:14px">النسب</h3>
+    ${rateBar("نسبة التأكيد (من الإجمالي)", s.confirm_rate, "var(--orange)")}
+    ${rateBar("نسبة التسليم (من المؤكد)", s.deliver_rate, "var(--green)")}
+    ${rateBar("نسبة المرتجع (من المؤكد)", s.return_rate, "#9a3412")}
+  </div>`;
+}
+function breakdownTable(title, arr){
+  if(!arr||!arr.length) return "";
+  return `<div class="panel"><h3 style="color:var(--blue);margin-bottom:12px">${title}</h3>
+    <table><thead><tr><th>الاسم</th><th>الإجمالي</th><th>مؤكدة</th><th>مُسلّمة</th><th>مرتجعة</th><th>نسبة التسليم</th><th>المبيعات</th></tr></thead><tbody>
+    ${arr.map(x=>`<tr><td><b>${x.name}</b></td><td>${x.stats.total}</td><td>${x.stats.confirmed_total}</td>
+      <td style="color:var(--green)">${x.stats.delivered}</td><td style="color:#9a3412">${x.stats.returned}</td>
+      <td>${x.stats.deliver_rate}%</td><td>${kd(x.stats.sales)} د.ك</td></tr>`).join("")}
+    </tbody></table></div>`;
+}
+async function adminDashboard(){
+  DASH_LOADER=loadAdminDash;
+  $("#dashMain").innerHTML = `<div class="panel"><h2 style="margin:0">📊 لوحة الإحصائيات</h2></div>`+dateFilterBar()+`<div id="dashBody"><div class="empty">...</div></div>`;
+  loadAdminDash();
+}
+async function loadAdminDash(){
+  try{
+    const d=await api("/api/dashboard"+dashQuery());
+    $("#dashBody").innerHTML = statCards(d.overall) + breakdownTable("حسب المجموعة", d.by_group) + breakdownTable("حسب المسوّق", d.by_marketer);
+  }catch(e){ $("#dashBody").innerHTML=`<div class="empty">${e.message}</div>`; }
+}
+
 let ORDER_FILTER_GROUP = "";
 async function adminOrders() {
   const m=$("#dashMain");
@@ -548,7 +612,7 @@ async function adminOrders() {
         <td>${kd(o.total)}</td><td>${kd(del)}</td><td style="font-weight:700;color:var(--orange)">${kd(grand)}</td>
         <td><span class="badge b-${o.status}">${statusAr(o.status)}</span></td>
         <td><select onchange="updOrder(${o.id},this.value)">
-          ${["pending","confirmed","shipped","delivered","cancelled"].map(s=>`<option value="${s}" ${s===o.status?"selected":""}>${statusAr(s)}</option>`).join("")}
+          ${ORDER_STATUSES.map(s=>`<option value="${s}" ${s===o.status?"selected":""}>${statusAr(s)}</option>`).join("")}
         </select></td></tr>`;}).join("")}
     </tbody></table>` : `<div class="empty">لا توجد طلبات</div>`;
   } catch(e){ $("#aOrd").innerHTML=`<div class="empty">${e.message}</div>`; }
@@ -580,9 +644,22 @@ async function adminGroups(){
   <div class="panel"><h2>المجموعات</h2><div id="gList">...</div></div>`;
   try{
     const d=await api("/api/admin/groups");
-    $("#gList").innerHTML = d.groups.length ? `<table><thead><tr><th>#</th><th>اسم المجموعة</th><th>عدد الأعضاء</th><th>تاريخ الإنشاء</th></tr></thead><tbody>
-      ${d.groups.map(g=>`<tr><td>#${g.id}</td><td><b>${g.name}</b></td><td>${g.members}</td><td class="muted">${g.created_at}</td></tr>`).join("")}
-    </tbody></table><p class="muted" style="margin-top:12px">لتعيين المسوّقين للمجموعات، روح لقسم «المسوّقين».</p>`
+    $("#gList").innerHTML = d.groups.length ? d.groups.map(g=>`
+      <div style="padding:14px;border-bottom:1px solid var(--line)">
+        <div class="row-between">
+          <div><b style="font-size:17px">${g.name}</b> <span class="badge b-confirmed">${g.members} عضو</span></div>
+          <span class="muted" style="font-size:13px">${g.created_at}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+          <span class="muted" style="font-size:14px">👑 قائد المجموعة:</span>
+          <select onchange="setLeader(${g.id},this.value)" style="padding:6px 10px;border:1.5px solid var(--line);border-radius:8px">
+            <option value="">— بدون قائد —</option>
+            ${(g.member_list||[]).map(u=>`<option value="${u.id}" ${g.leader_id===u.id?"selected":""}>${u.name}</option>`).join("")}
+          </select>
+          ${g.leader_name?`<span class="muted" style="font-size:13px">الحالي: <b>${g.leader_name}</b></span>`:""}
+        </div>
+      </div>`).join("")
+      + `<p class="muted" style="margin-top:12px;padding:0 14px">القائد يشوف كل أرقام مجموعته. لإضافة أعضاء للمجموعة، روح لقسم «المسوّقين».</p>`
       : `<div class="empty">لا توجد مجموعات بعد. اعمل أول مجموعة فوق.</div>`;
   }catch(e){ $("#gList").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
@@ -592,6 +669,11 @@ async function addGroup(e){
     toast("تمت إضافة المجموعة ✅"); adminGroups();
   }catch(err){ $("#gAlert").innerHTML=`<div class="alert err">${err.message}</div>`; }
   return false;
+}
+async function setLeader(gid, uid){
+  try{ await api("/api/admin/set-leader",{method:"POST",body:{group_id:gid,user_id:uid||null}});
+    toast(uid?"تم تعيين القائد ✅":"تم إزالة القائد"); adminGroups();
+  }catch(e){ toast(e.message); }
 }
 async function updOrder(id,status){
   try { await api("/api/admin/update-order",{method:"POST",body:{order_id:id,status}});
@@ -821,7 +903,8 @@ async function toggleAdminStatus(id,status){
 
 /* ================= مشترك ================= */
 function statusAr(s){return{pending:"قيد الانتظار",confirmed:"مؤكد",shipped:"قيد الشحن",delivered:"تم التسليم",
-  cancelled:"ملغي",paid:"مدفوع",rejected:"مرفوض"}[s]||s;}
+  cancelled:"ملغي",returned:"مرتجع",paid:"مدفوع",rejected:"مرفوض"}[s]||s;}
+const ORDER_STATUSES=["pending","confirmed","shipped","delivered","returned","cancelled"];
 function renderFooter(){
   if ($("#ftr")) return;
   const f=document.createElement("footer"); f.id="ftr";
