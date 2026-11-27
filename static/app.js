@@ -186,9 +186,11 @@ async function renderProducts() {
   } catch (e) { $("#prodGrid").innerHTML = `<div class="empty">${e.message}</div>`; }
   renderFooter();
 }
+function isImg(v){ return v && (v.indexOf("/uploads/")===0 || v.indexOf("http")===0); }
+function thumbInner(p){ return isImg(p.image) ? `<img src="${p.image}" alt="${p.name}" style="max-width:100%;max-height:150px;object-fit:contain">` : (p.image||"📦"); }
 function productCard(p) {
   return `<div class="product">
-    <div class="thumb">${p.image || "📦"}</div>
+    <div class="thumb">${thumbInner(p)}</div>
     <div class="body">
       <span class="cat">${p.category || ""}</span>
       <h4>${p.name}</h4>
@@ -367,7 +369,7 @@ function renderAdmin() {
       <a onclick="adminView('groups')" id="av-groups">🗂️ المجموعات</a>
       <a onclick="adminView('withdrawals')" id="av-withdrawals">💳 طلبات السحب</a>
       <a onclick="adminView('marketers')" id="av-marketers">👥 المسوّقين</a>
-      <a onclick="adminView('addprod')" id="av-addprod">➕ إضافة منتج</a>
+      <a onclick="adminView('products')" id="av-products">📦 المنتجات</a>
     </aside>
     <div id="dashMain"></div>
   </div>`;
@@ -375,14 +377,14 @@ function renderAdmin() {
 }
 function adminView(v) {
   ADMIN_VIEW = v;
-  ["orders","groups","withdrawals","marketers","addprod"].forEach(x=>{
+  ["orders","groups","withdrawals","marketers","products"].forEach(x=>{
     const el=$("#av-"+x); if(el) el.classList.toggle("active",x===v);
   });
   if (v==="orders") adminOrders();
   if (v==="groups") adminGroups();
   if (v==="withdrawals") adminWithdrawals();
   if (v==="marketers") adminMarketers();
-  if (v==="addprod") adminAddProduct();
+  if (v==="products") adminProducts();
 }
 let ORDER_FILTER_GROUP = "";
 async function adminOrders() {
@@ -503,38 +505,116 @@ async function toggleBan(id){
   try{ const r=await api("/api/admin/toggle-ban",{method:"POST",body:{user_id:id}});
     toast(r.status==="banned"?"تم الحظر":"تم فك الحظر"); adminMarketers(); } catch(e){ toast(e.message); }
 }
-function adminAddProduct() {
-  $("#dashMain").innerHTML = `<div class="panel"><h2>إضافة منتج جديد</h2>
-    <div id="apAlert"></div>
-    <form onsubmit="return addProduct(event)">
-      <div class="field"><label>اسم المنتج</label><input id="apName" required></div>
-      <div class="field"><label>الوصف</label><textarea id="apDesc" rows="2"></textarea></div>
+// ===== إدارة المنتجات =====
+let UPLOADED_IMG = null; // رابط الصورة بعد الرفع
+
+async function adminProducts(){
+  const m=$("#dashMain");
+  m.innerHTML=`<div class="panel">
+    <div class="row-between"><h2 style="margin:0">المنتجات</h2>
+      <button class="btn" onclick="adminProductForm()">➕ إضافة منتج</button></div>
+    <div id="pList" style="margin-top:16px">...</div></div>`;
+  try{
+    const d=await api("/api/admin/products");
+    $("#pList").innerHTML = d.products.length ? `<table><thead><tr><th>الصورة</th><th>المنتج</th><th>التكلفة</th><th>سعر البيع</th><th>العمولة</th><th>المخزون</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>
+      ${d.products.map(p=>`<tr>
+        <td><div style="width:48px;height:48px;border-radius:8px;overflow:hidden;background:#f3f4f6;display:grid;place-items:center;font-size:24px">${isImg(p.image)?`<img src="${p.image}" style="width:100%;height:100%;object-fit:cover">`:(p.image||"📦")}</div></td>
+        <td><b>${p.name}</b><br><small class="muted">${p.category||""}</small></td>
+        <td>${kd(p.base_price)}</td>
+        <td>${kd(p.min_price)} - ${kd(p.max_price)}</td>
+        <td style="color:var(--green)">${kd(p.commission)}</td>
+        <td>${p.stock}</td>
+        <td><span class="badge ${p.active?'b-active':'b-cancelled'}">${p.active?'ظاهر':'مخفي'}</span></td>
+        <td style="white-space:nowrap">
+          <button class="btn sm gray" onclick='adminProductForm(${JSON.stringify(p).replace(/'/g,"&#39;")})'>تعديل</button>
+          <button class="btn sm ${p.active?'red':'green'}" onclick="toggleProduct(${p.id})">${p.active?'إخفاء':'إظهار'}</button>
+        </td></tr>`).join("")}
+    </tbody></table>` : `<div class="empty">لا توجد منتجات. اضغط «➕ إضافة منتج».</div>`;
+  }catch(e){ $("#pList").innerHTML=`<div class="empty">${e.message}</div>`; }
+}
+
+function adminProductForm(p){
+  const edit = !!p;
+  UPLOADED_IMG = edit ? (isImg(p.image)?p.image:null) : null;
+  const preview = isImg(p?.image) ? `<img id="imgPrev" src="${p.image}" style="max-width:140px;max-height:140px;border-radius:10px;border:1px solid var(--line)">` : `<div id="imgPrev" style="width:140px;height:140px;border-radius:10px;border:2px dashed var(--line);display:grid;place-items:center;font-size:40px;color:#9ca3af">🖼️</div>`;
+  $("#dashMain").innerHTML=`<div class="panel">
+    <div class="row-between"><h2 style="margin:0">${edit?'تعديل منتج':'إضافة منتج جديد'}</h2>
+      <button class="btn gray sm" onclick="adminProducts()">◀ رجوع للقائمة</button></div>
+    <div id="apAlert" style="margin-top:12px"></div>
+    <form onsubmit="return saveProduct(event, ${edit?p.id:'null'})" style="margin-top:12px">
+      <div class="field"><label>صورة المنتج</label>
+        <div style="display:flex;gap:16px;align-items:center">
+          ${preview}
+          <div>
+            <input type="file" id="apFile" accept="image/*" onchange="pickImage(this)" style="font-size:14px">
+            <div class="muted" style="font-size:12px;margin-top:6px">JPG / PNG — هيتصغّر تلقائيًا</div>
+            <div id="upMsg" class="muted" style="font-size:13px;margin-top:4px"></div>
+          </div>
+        </div>
+      </div>
+      <div class="field"><label>اسم المنتج</label><input id="apName" value="${edit?escAttr(p.name):''}" required></div>
+      <div class="field"><label>الوصف</label><textarea id="apDesc" rows="2">${edit?escHtml(p.description||''):''}</textarea></div>
+      <div class="field"><label>التصنيف</label><input id="apCat" value="${edit?escAttr(p.category||''):''}" placeholder="مثلاً: إلكترونيات"></div>
       <div class="row-between">
-        <div class="field" style="flex:1"><label>التصنيف</label><input id="apCat"></div>
-        <div class="field" style="width:100px"><label>أيقونة</label><input id="apImg" value="📦"></div>
+        <div class="field" style="flex:1"><label>سعر التكلفة (د.ك)</label><input id="apBase" type="number" step="0.001" value="${edit?p.base_price:''}" required></div>
+        <div class="field" style="flex:1"><label>أقل سعر بيع</label><input id="apMin" type="number" step="0.001" value="${edit?p.min_price:''}" required></div>
+        <div class="field" style="flex:1"><label>أعلى سعر بيع</label><input id="apMax" type="number" step="0.001" value="${edit?p.max_price:''}" required></div>
       </div>
       <div class="row-between">
-        <div class="field" style="flex:1"><label>سعر التكلفة</label><input id="apBase" type="number" step="0.001" required></div>
-        <div class="field" style="flex:1"><label>أقل سعر بيع</label><input id="apMin" type="number" step="0.001" required></div>
-        <div class="field" style="flex:1"><label>أعلى سعر بيع</label><input id="apMax" type="number" step="0.001" required></div>
+        <div class="field" style="flex:1"><label>عمولة المسوّق (د.ك)</label><input id="apComm" type="number" step="0.001" value="${edit?p.commission:''}" required></div>
+        <div class="field" style="flex:1"><label>المخزون</label><input id="apStock" type="number" value="${edit?p.stock:100}" required></div>
       </div>
-      <div class="row-between">
-        <div class="field" style="flex:1"><label>العمولة</label><input id="apComm" type="number" step="0.001" required></div>
-        <div class="field" style="flex:1"><label>المخزون</label><input id="apStock" type="number" value="100" required></div>
-      </div>
-      <button class="btn">إضافة المنتج</button>
+      <button class="btn">${edit?'حفظ التعديلات':'إضافة المنتج'}</button>
     </form></div>`;
 }
-async function addProduct(e){
+
+function escAttr(s){ return String(s).replace(/"/g,"&quot;"); }
+function escHtml(s){ return String(s).replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+// تصغير الصورة في المتصفح قبل الرفع ثم رفعها
+function pickImage(input){
+  const file = input.files[0]; if(!file) return;
+  $("#upMsg").textContent="جاري رفع الصورة...";
+  const reader = new FileReader();
+  reader.onload = (ev)=>{
+    const img = new Image();
+    img.onload = async ()=>{
+      const max=800; let {width,height}=img;
+      if(width>max){ height=height*max/width; width=max; }
+      const canvas=document.createElement("canvas"); canvas.width=width; canvas.height=height;
+      canvas.getContext("2d").drawImage(img,0,0,width,height);
+      const b64 = canvas.toDataURL("image/jpeg",0.85);
+      // معاينة فورية
+      const prev=$("#imgPrev");
+      if(prev){ const ni=document.createElement("img"); ni.id="imgPrev"; ni.src=b64; ni.style.cssText="max-width:140px;max-height:140px;border-radius:10px;border:1px solid var(--line)"; prev.replaceWith(ni); }
+      try{
+        const d=await api("/api/admin/upload-image",{method:"POST",body:{data:b64,ext:"jpg"}});
+        UPLOADED_IMG=d.url; $("#upMsg").textContent="تم رفع الصورة ✅";
+      }catch(e){ $("#upMsg").textContent="فشل رفع الصورة: "+e.message; }
+    };
+    img.src=ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function saveProduct(e, editId){
   e.preventDefault();
+  const body={
+    name:$("#apName").value, description:$("#apDesc").value, category:$("#apCat").value,
+    image: UPLOADED_IMG || "📦",
+    base_price:$("#apBase").value, min_price:$("#apMin").value, max_price:$("#apMax").value,
+    commission:$("#apComm").value, stock:$("#apStock").value };
   try{
-    await api("/api/admin/add-product",{method:"POST",body:{
-      name:$("#apName").value, description:$("#apDesc").value, category:$("#apCat").value, image:$("#apImg").value,
-      base_price:$("#apBase").value, min_price:$("#apMin").value, max_price:$("#apMax").value,
-      commission:$("#apComm").value, stock:$("#apStock").value }});
-    toast("تمت إضافة المنتج ✅"); adminAddProduct();
+    if(editId){ body.id=editId; await api("/api/admin/update-product",{method:"POST",body});
+      toast("تم حفظ التعديلات ✅"); }
+    else { await api("/api/admin/add-product",{method:"POST",body}); toast("تمت إضافة المنتج ✅"); }
+    adminProducts();
   } catch(err){ $("#apAlert").innerHTML=`<div class="alert err">${err.message}</div>`; }
   return false;
+}
+async function toggleProduct(id){
+  try{ await api("/api/admin/toggle-product",{method:"POST",body:{id}}); toast("تم التحديث"); adminProducts(); }
+  catch(e){ toast(e.message); }
 }
 
 /* ================= مشترك ================= */

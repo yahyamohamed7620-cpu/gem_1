@@ -8,6 +8,7 @@ Kuwait Market — منصة دروبشيبينج.
 
 API يرجع JSON. الواجهات ملفات ثابتة في مجلد static/.
 """
+import base64
 import csv
 import io
 import json
@@ -381,13 +382,39 @@ def api_admin_update_withdrawal(handler, user, body):
     return 200, {"ok": True}
 
 
+UPLOAD_DIR = os.path.join(STATIC_DIR, "uploads")
+ALLOWED_IMG = {"jpg", "jpeg", "png", "webp", "gif"}
+
+
+def api_admin_upload_image(handler, user, body):
+    """يستقبل صورة Base64 ويحفظها في مجلد uploads ويرجّع رابطها."""
+    data = body.get("data") or ""
+    ext = (body.get("ext") or "jpg").lower().lstrip(".")
+    if ext not in ALLOWED_IMG:
+        ext = "jpg"
+    # يقبل مع أو بدون بادئة data:
+    if "," in data:
+        data = data.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(data)
+    except Exception:
+        return 400, {"error": "صورة غير صالحة"}
+    if len(raw) > 5 * 1024 * 1024:
+        return 400, {"error": "حجم الصورة كبير (الحد 5 ميجا)"}
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    fname = f"{secrets.token_hex(12)}.{ext}"
+    with open(os.path.join(UPLOAD_DIR, fname), "wb") as f:
+        f.write(raw)
+    return 200, {"url": f"/uploads/{fname}"}
+
+
 def api_admin_add_product(handler, user, body):
     try:
         conn = get_conn()
         conn.execute(
             """INSERT INTO products (name,description,category,image,base_price,min_price,max_price,commission,stock)
                VALUES (?,?,?,?,?,?,?,?,?)""",
-            (body["name"], body.get("description", ""), body.get("category", ""), body.get("image", "📦"),
+            (body["name"], body.get("description", ""), body.get("category", ""), body.get("image") or "📦",
              float(body["base_price"]), float(body["min_price"]), float(body["max_price"]),
              float(body["commission"]), int(body.get("stock", 100))),
         )
@@ -396,6 +423,49 @@ def api_admin_add_product(handler, user, body):
         return 200, {"ok": True}
     except Exception as e:
         return 400, {"error": f"بيانات المنتج غير صحيحة: {e}"}
+
+
+def api_admin_products(handler, user):
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM products ORDER BY id DESC").fetchall()
+    conn.close()
+    return 200, {"products": [row_to_dict(r) for r in rows]}
+
+
+def api_admin_update_product(handler, user, body):
+    pid = body.get("id")
+    if not pid:
+        return 400, {"error": "منتج غير محدد"}
+    try:
+        conn = get_conn()
+        conn.execute(
+            """UPDATE products SET name=?, description=?, category=?, image=?,
+                   base_price=?, min_price=?, max_price=?, commission=?, stock=?
+               WHERE id=?""",
+            (body["name"], body.get("description", ""), body.get("category", ""), body.get("image") or "📦",
+             float(body["base_price"]), float(body["min_price"]), float(body["max_price"]),
+             float(body["commission"]), int(body.get("stock", 100)), pid),
+        )
+        conn.commit()
+        conn.close()
+        return 200, {"ok": True}
+    except Exception as e:
+        return 400, {"error": f"بيانات غير صحيحة: {e}"}
+
+
+def api_admin_toggle_product(handler, user, body):
+    """إخفاء/إظهار منتج (بدل الحذف النهائي حفاظًا على سجل الطلبات)."""
+    pid = body.get("id")
+    conn = get_conn()
+    row = conn.execute("SELECT active FROM products WHERE id=?", (pid,)).fetchone()
+    if not row:
+        conn.close()
+        return 404, {"error": "غير موجود"}
+    new = 0 if row["active"] else 1
+    conn.execute("UPDATE products SET active=? WHERE id=?", (new, pid))
+    conn.commit()
+    conn.close()
+    return 200, {"ok": True, "active": new}
 
 
 def api_admin_marketers(handler, user):
@@ -439,6 +509,7 @@ AUTH_GET = {
     "/api/admin/withdrawals": lambda h, u, q: api_admin_withdrawals(h, u) if require_admin(u) else _DENY,
     "/api/admin/marketers": lambda h, u, q: api_admin_marketers(h, u) if require_admin(u) else _DENY,
     "/api/admin/groups": lambda h, u, q: api_admin_groups(h, u) if require_admin(u) else _DENY,
+    "/api/admin/products": lambda h, u, q: api_admin_products(h, u) if require_admin(u) else _DENY,
 }
 AUTH_POST = {
     "/api/logout": api_logout,
@@ -450,6 +521,9 @@ AUTH_POST = {
     "/api/admin/toggle-ban": lambda h, u, b: api_admin_toggle_ban(h, u, b) if require_admin(u) else _DENY,
     "/api/admin/add-group": lambda h, u, b: api_admin_add_group(h, u, b) if require_admin(u) else _DENY,
     "/api/admin/assign-group": lambda h, u, b: api_admin_assign_group(h, u, b) if require_admin(u) else _DENY,
+    "/api/admin/upload-image": lambda h, u, b: api_admin_upload_image(h, u, b) if require_admin(u) else _DENY,
+    "/api/admin/update-product": lambda h, u, b: api_admin_update_product(h, u, b) if require_admin(u) else _DENY,
+    "/api/admin/toggle-product": lambda h, u, b: api_admin_toggle_product(h, u, b) if require_admin(u) else _DENY,
 }
 
 # المعالِجات اللي بتاخد body
@@ -486,6 +560,12 @@ class Handler(BaseHTTPRequestHandler):
             ".css": "text/css; charset=utf-8",
             ".js": "application/javascript; charset=utf-8",
             ".svg": "image/svg+xml",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+            ".ico": "image/x-icon",
         }.get(ext, "application/octet-stream")
         with open(path, "rb") as f:
             data = f.read()
