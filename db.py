@@ -52,10 +52,11 @@ CREATE TABLE IF NOT EXISTS users (
     email       TEXT UNIQUE NOT NULL,
     phone       TEXT,
     password    TEXT NOT NULL,
-    role        TEXT NOT NULL DEFAULT 'marketer',   -- marketer | admin
+    role        TEXT NOT NULL DEFAULT 'marketer',   -- owner | admin | marketer
     status      TEXT NOT NULL DEFAULT 'active',       -- active | banned
-    balance     REAL NOT NULL DEFAULT 0,              -- رصيد العمولة القابل للسحب
+    balance     REAL NOT NULL DEFAULT 0,              -- رصيد الأرباح القابل للسحب
     group_id    INTEGER REFERENCES groups(id),        -- المجموعة/الفريق التابع له
+    permissions TEXT NOT NULL DEFAULT '[]',           -- صلاحيات المدير (JSON)
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -65,10 +66,13 @@ CREATE TABLE IF NOT EXISTS products (
     description  TEXT,
     category     TEXT,
     image        TEXT,
-    base_price   REAL NOT NULL,       -- السعر الأساسي (تكلفة المنصة)
-    min_price    REAL NOT NULL,       -- أقل سعر بيع مسموح
-    max_price    REAL NOT NULL,       -- أعلى سعر بيع مسموح
-    commission   REAL NOT NULL,       -- العمولة الثابتة للمسوق
+    base_price   REAL NOT NULL DEFAULT 0,  -- (قديم) متروك للتوافق
+    min_price    REAL NOT NULL DEFAULT 0,  -- (قديم)
+    max_price    REAL NOT NULL DEFAULT 0,  -- (قديم)
+    commission   REAL NOT NULL DEFAULT 0,  -- (قديم)
+    wholesale_price REAL NOT NULL DEFAULT 0,  -- سعر الجملة (للأدمن فقط)
+    sell_price      REAL NOT NULL DEFAULT 0,  -- سعر البيع (يظهر للمسوّق)
+    offers          TEXT NOT NULL DEFAULT '[]', -- عروض الكمية JSON: [{qty,price}]
     stock        INTEGER NOT NULL DEFAULT 100,
     active       INTEGER NOT NULL DEFAULT 1,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -82,8 +86,11 @@ CREATE TABLE IF NOT EXISTS orders (
     customer_phone TEXT NOT NULL,
     customer_address TEXT NOT NULL,
     governorate   TEXT,
-    total         REAL NOT NULL,         -- إجمالي سعر البيع للعميل
-    commission    REAL NOT NULL,         -- إجمالي عمولة المسوق من الطلب
+    area          TEXT,                  -- المدينة/المنطقة
+    zone          TEXT,                  -- التقسيمة (خط التوصيل)
+    delivery      REAL NOT NULL DEFAULT 0,-- سعر التوصيل
+    total         REAL NOT NULL,         -- إجمالي سعر بيع المنتجات (بدون توصيل)
+    commission    REAL NOT NULL,         -- إجمالي ربح المسوّق من الطلب
     status        TEXT NOT NULL DEFAULT 'pending',  -- pending | confirmed | shipped | delivered | cancelled
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -94,8 +101,9 @@ CREATE TABLE IF NOT EXISTS order_items (
     product_id  INTEGER NOT NULL REFERENCES products(id),
     product_name TEXT NOT NULL,
     qty         INTEGER NOT NULL,
-    sell_price  REAL NOT NULL,          -- سعر البيع للوحدة (حدده المسوق)
-    commission  REAL NOT NULL           -- عمولة الوحدة
+    sell_price  REAL NOT NULL,          -- إجمالي سعر بيع هذا السطر
+    commission  REAL NOT NULL,          -- ربح هذا السطر
+    wholesale   REAL NOT NULL DEFAULT 0 -- إجمالي سعر جملة هذا السطر (لحساب الربح)
 );
 
 CREATE TABLE IF NOT EXISTS commissions (
@@ -132,10 +140,31 @@ def _column_exists(conn, table, col):
 
 def migrate(conn):
     """ترحيل آمن للقواعد القديمة: يضيف الأعمدة الجديدة لو مش موجودة."""
-    if not _column_exists(conn, "users", "group_id"):
-        conn.execute("ALTER TABLE users ADD COLUMN group_id INTEGER")
-    if not _column_exists(conn, "orders", "group_id"):
-        conn.execute("ALTER TABLE orders ADD COLUMN group_id INTEGER")
+    def add(table, col, decl):
+        if not _column_exists(conn, table, col):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+    add("users", "group_id", "INTEGER")
+    add("users", "permissions", "TEXT NOT NULL DEFAULT '[]'")
+    add("orders", "group_id", "INTEGER")
+    add("orders", "area", "TEXT")
+    add("orders", "zone", "TEXT")
+    add("orders", "delivery", "REAL NOT NULL DEFAULT 0")
+    add("products", "wholesale_price", "REAL NOT NULL DEFAULT 0")
+    add("products", "sell_price", "REAL NOT NULL DEFAULT 0")
+    add("products", "offers", "TEXT NOT NULL DEFAULT '[]'")
+    add("order_items", "wholesale", "REAL NOT NULL DEFAULT 0")
+
+    # تعبئة التسعير الجديد للمنتجات القديمة من الحقول القديمة
+    conn.execute("UPDATE products SET sell_price=min_price WHERE sell_price=0 AND min_price>0")
+    conn.execute("UPDATE products SET wholesale_price=base_price WHERE wholesale_price=0 AND base_price>0")
+
+    # التأكد من وجود مالك (owner) واحد على الأقل
+    has_owner = conn.execute("SELECT 1 FROM users WHERE role='owner'").fetchone()
+    if not has_owner:
+        row = conn.execute("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()
+        if row:
+            conn.execute("UPDATE users SET role='owner' WHERE id=?", (row["id"],))
 
 
 def init_db():

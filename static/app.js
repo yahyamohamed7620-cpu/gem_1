@@ -2,7 +2,21 @@
 let TOKEN = localStorage.getItem("token") || null;
 let USER = JSON.parse(localStorage.getItem("user") || "null");
 let PRODUCTS = [];
-let CART = {}; // {product_id: {product, qty, sell_price}}
+let CART = {}; // {product_id: {product, qty}}
+let CITIES = [];
+
+function can(key){
+  if(!USER) return false;
+  if(USER.role==="owner") return true;
+  return (USER.permissions||[]).includes(key);
+}
+function isAdminRole(){ return USER && (USER.role==="admin"||USER.role==="owner"); }
+async function loadCities(){ if(!CITIES.length){ try{ CITIES=(await api("/api/cities")).cities; }catch(e){} } return CITIES; }
+// سعر سطر المنتج حسب عروض الكمية
+function linePrice(p, qty){
+  const o=(p.offers||[]).find(x=>Number(x.qty)===Number(qty));
+  return o ? Number(o.price) : Number(p.sell_price)*qty;
+}
 
 /* ================= أدوات ================= */
 const $ = (s) => document.querySelector(s);
@@ -30,7 +44,7 @@ function syncNav() {
   if (USER) {
     $("#guestBtns").classList.add("hidden");
     $("#userBtns").classList.remove("hidden");
-    $("#dashLink").textContent = USER.role === "admin" ? "لوحة الأدمن" : "لوحتي";
+    $("#dashLink").textContent = isAdminRole() ? "لوحة الأدمن" : "لوحتي";
   } else {
     $("#guestBtns").classList.remove("hidden");
     $("#userBtns").classList.add("hidden");
@@ -69,13 +83,15 @@ async function doRegister(e) {
   } catch (err) { authErr(err.message); }
   return false;
 }
-function saveSession(d) {
+async function saveSession(d) {
   TOKEN = d.token; USER = d.user;
   localStorage.setItem("token", TOKEN);
+  // نجيب الملف الكامل (الدور + الصلاحيات)
+  try { const me = await api("/api/me"); USER = {...USER, ...me}; } catch(e){}
   localStorage.setItem("user", JSON.stringify(USER));
   closeAuth(); syncNav();
   toast("أهلاً " + USER.name + " 👋");
-  go(USER.role === "admin" ? "dashboard" : "products");
+  go(isAdminRole() ? "dashboard" : "products");
 }
 async function logout() {
   try { await api("/api/logout", { method: "POST" }); } catch (e) {}
@@ -91,9 +107,9 @@ function updateCartCount() {
 }
 function addToCart(pid) {
   if (!USER) { openAuth("login"); return; }
-  if (USER.role === "admin") { toast("الأدمن مايعملش طلبات"); return; }
+  if (isAdminRole()) { toast("الأدمن مايعملش طلبات"); return; }
   const p = PRODUCTS.find((x) => x.id === pid);
-  if (!CART[pid]) CART[pid] = { product: p, qty: 1, sell_price: p.min_price };
+  if (!CART[pid]) CART[pid] = { product: p, qty: 1 };
   else CART[pid].qty++;
   updateCartCount();
   toast("تمت الإضافة للسلة 🛒");
@@ -106,7 +122,7 @@ async function go(route) {
   if (route === "products") return renderProducts();
   if (route === "dashboard") {
     if (!USER) return openAuth("login");
-    return USER.role === "admin" ? renderAdmin() : renderDashboard();
+    return isAdminRole() ? renderAdmin() : renderDashboard();
   }
 }
 
@@ -189,16 +205,16 @@ async function renderProducts() {
 function isImg(v){ return v && (v.indexOf("/uploads/")===0 || v.indexOf("http")===0); }
 function thumbInner(p){ return isImg(p.image) ? `<img src="${p.image}" alt="${p.name}" style="max-width:100%;max-height:150px;object-fit:contain">` : (p.image||"📦"); }
 function productCard(p) {
+  const offers = (p.offers||[]).map(o=>`<span class="comm" style="background:#fff3ec;color:var(--orange)">${o.qty} بـ ${kd(o.price)}</span>`).join(" ");
   return `<div class="product">
     <div class="thumb">${thumbInner(p)}</div>
     <div class="body">
       <span class="cat">${p.category || ""}</span>
       <h4>${p.name}</h4>
       <div class="price-box">
-        <span class="price">${kd(p.min_price)} د.ك</span>
-        <span class="comm">عمولة ${kd(p.commission)}</span>
+        <span class="price">${kd(p.sell_price)} د.ك</span>
       </div>
-      <div class="muted" style="font-size:12px">البيع بين ${kd(p.min_price)} و ${kd(p.max_price)} د.ك</div>
+      ${offers?`<div style="display:flex;gap:6px;flex-wrap:wrap">${offers}</div>`:""}
       <button class="btn" onclick="addToCart(${p.id})">أضف إلى السلة</button>
     </div>
   </div>`;
@@ -257,16 +273,17 @@ async function dashOrders() {
   } catch (e) { $("#ordList").innerHTML = `<div class="empty">${e.message}</div>`; }
 }
 function ordersTable(orders) {
-  return `<table><thead><tr><th>#</th><th>العميل</th><th>المنتجات</th><th>الإجمالي</th><th>عمولتك</th><th>الحالة</th><th>التاريخ</th></tr></thead><tbody>
-    ${orders.map(o=>`<tr>
+  return `<table><thead><tr><th>#</th><th>العميل</th><th>المنطقة</th><th>المنتجات</th><th>السعر</th><th>التوصيل</th><th>الإجمالي</th><th>الحالة</th></tr></thead><tbody>
+    ${orders.map(o=>{const del=o.delivery||0; const grand=(o.total||0)+del; return `<tr>
       <td>#${o.id}</td>
       <td>${o.customer_name}<br><small class="muted">${o.customer_phone}</small></td>
+      <td>${o.area||"—"}<br><small class="muted">${o.zone||""}</small></td>
       <td>${o.items.map(i=>`${i.product_name} ×${i.qty}`).join("<br>")}</td>
-      <td>${kd(o.total)} د.ك</td>
-      <td style="color:var(--green);font-weight:700">${kd(o.commission)}</td>
+      <td>${kd(o.total)}</td>
+      <td>${kd(del)}</td>
+      <td style="font-weight:700;color:var(--orange)">${kd(grand)}</td>
       <td><span class="badge b-${o.status}">${statusAr(o.status)}</span></td>
-      <td class="muted">${o.created_at}</td>
-    </tr>`).join("")}
+    </tr>`;}).join("")}
   </tbody></table>`;
 }
 async function dashWallet() {
@@ -311,8 +328,10 @@ async function submitWithdraw(e) {
 }
 
 /* ================= نافذة الطلب ================= */
-function openOrder() {
+async function openOrder() {
   if (!Object.keys(CART).length) { toast("السلة فاضية، اختر منتجات أولاً"); go("products"); return; }
+  await loadCities();
+  $("#cityList").innerHTML = CITIES.map(c=>`<option value="${c.city}">`).join("");
   renderCart();
   $("#orderModal").classList.add("show");
 }
@@ -321,39 +340,53 @@ function renderCart() {
   const items = Object.values(CART);
   $("#cartItems").innerHTML = items.map(it => {
     const p = it.product;
+    const lp = linePrice(p, it.qty);
+    const offerNote = (p.offers||[]).find(o=>Number(o.qty)===Number(it.qty)) ? `<span style="color:var(--orange)">عرض</span>` : "";
     return `<div class="row-between" style="padding:10px;border-bottom:1px solid var(--line)">
-      <div><b>${p.image} ${p.name}</b><br><small class="muted">البيع بين ${kd(p.min_price)} و ${kd(p.max_price)} د.ك</small></div>
+      <div style="flex:1"><b>${isImg(p.image)?"🖼️":p.image} ${p.name}</b><br><small class="muted">${kd(p.sell_price)} د.ك/قطعة ${offerNote}</small></div>
       <div class="qty">
         <button type="button" onclick="chQty(${p.id},-1)">−</button><span>${it.qty}</span>
         <button type="button" onclick="chQty(${p.id},1)">+</button>
       </div>
-      <div class="field" style="margin:0;width:120px">
-        <label style="font-size:12px">سعر البيع</label>
-        <input type="number" step="0.001" min="${p.min_price}" max="${p.max_price}" value="${it.sell_price}" onchange="chPrice(${p.id},this.value)">
-      </div>
+      <div style="width:90px;text-align:left;font-weight:700">${kd(lp)} د.ك</div>
       <button type="button" class="btn red sm" onclick="rmCart(${p.id})">حذف</button>
     </div>`;
   }).join("");
   recalc();
 }
 function chQty(pid, d) { CART[pid].qty = Math.max(1, CART[pid].qty + d); renderCart(); updateCartCount(); }
-function chPrice(pid, v) { CART[pid].sell_price = parseFloat(v) || CART[pid].product.min_price; recalc(); }
 function rmCart(pid) { delete CART[pid]; updateCartCount(); if(!Object.keys(CART).length){closeOrder();go("products");return;} renderCart(); }
+function currentDelivery(){
+  const city = $("#custCity") ? $("#custCity").value.trim() : "";
+  const c = CITIES.find(x=>x.city===city);
+  return c ? c.delivery : (city? 1 : 0);
+}
+function onCityChange(){
+  const city = $("#custCity").value.trim();
+  const c = CITIES.find(x=>x.city===city);
+  const info = $("#cityInfo");
+  if(c){ info.innerHTML = `التقسيمة: <b>${c.zone}</b> — التوصيل: <b>${kd(c.delivery)} د.ك</b>`; }
+  else if(city){ info.innerHTML = `<span style="color:var(--orange)">منطقة غير معروفة — التوصيل الافتراضي ١ د.ك</span>`; }
+  else { info.innerHTML = ""; }
+  recalc();
+}
 function recalc() {
-  let total = 0, comm = 0;
-  Object.values(CART).forEach(it => { total += it.sell_price * it.qty; comm += it.product.commission * it.qty; });
-  $("#ordTotal").textContent = kd(total);
-  $("#ordComm").textContent = kd(comm);
+  let sub = 0;
+  Object.values(CART).forEach(it => { sub += linePrice(it.product, it.qty); });
+  const del = currentDelivery();
+  $("#ordSub").textContent = kd(sub);
+  $("#ordDel").textContent = kd(del);
+  $("#ordTotal").textContent = kd(sub + del);
 }
 async function submitOrder(e) {
   e.preventDefault();
-  const items = Object.values(CART).map(it => ({ product_id: it.product.id, qty: it.qty, sell_price: it.sell_price }));
+  const items = Object.values(CART).map(it => ({ product_id: it.product.id, qty: it.qty }));
   try {
     const d = await api("/api/orders", { method:"POST", body:{
       items, customer:{ name:$("#custName").value, phone:$("#custPhone").value,
-        address:$("#custAddr").value, governorate:$("#custGov").value }}});
+        city:$("#custCity").value.trim(), address:$("#custAddr").value }}});
     CART = {}; updateCartCount(); closeOrder();
-    toast(`تم تسجيل الطلب #${d.order_id} ✅ عمولتك ${kd(d.commission)} د.ك`);
+    toast(`تم تسجيل الطلب #${d.order_id} ✅ الإجمالي ${kd(d.total)} د.ك`);
     go("dashboard"); setTimeout(()=>dashView("orders"),100);
   } catch (err) { $("#orderAlert").innerHTML = `<div class="alert err">${err.message}</div>`; }
   return false;
@@ -361,30 +394,38 @@ async function submitOrder(e) {
 
 /* ================= لوحة الأدمن ================= */
 let ADMIN_VIEW = "orders";
+const ADMIN_MENU = [
+  {v:"orders", perm:"orders", label:"📦 الطلبات"},
+  {v:"products", perm:"products", label:"🛍️ المنتجات"},
+  {v:"groups", perm:"groups", label:"🗂️ المجموعات"},
+  {v:"marketers", perm:"marketers", label:"👥 المسوّقين"},
+  {v:"withdrawals", perm:"withdrawals", label:"💳 طلبات السحب"},
+  {v:"admins", perm:"__owner__", label:"🛡️ المدراء والصلاحيات"},
+];
+function allowedMenu(){ return ADMIN_MENU.filter(m => m.perm==="__owner__" ? USER.role==="owner" : can(m.perm)); }
 function renderAdmin() {
+  const menu = allowedMenu();
+  const roleLabel = USER.role==="owner" ? "المالك" : "مدير";
   app.innerHTML = `<div class="dash">
     <aside class="side">
-      <div class="u"><div class="av" style="background:var(--blue)">${USER.name[0]}</div><div><b>${USER.name}</b><br><small class="muted">أدمن</small></div></div>
-      <a onclick="adminView('orders')" id="av-orders">📦 الطلبات</a>
-      <a onclick="adminView('groups')" id="av-groups">🗂️ المجموعات</a>
-      <a onclick="adminView('withdrawals')" id="av-withdrawals">💳 طلبات السحب</a>
-      <a onclick="adminView('marketers')" id="av-marketers">👥 المسوّقين</a>
-      <a onclick="adminView('products')" id="av-products">📦 المنتجات</a>
+      <div class="u"><div class="av" style="background:var(--blue)">${USER.name[0]}</div><div><b>${USER.name}</b><br><small class="muted">${roleLabel}</small></div></div>
+      ${menu.map(m=>`<a onclick="adminView('${m.v}')" id="av-${m.v}">${m.label}</a>`).join("")}
     </aside>
     <div id="dashMain"></div>
   </div>`;
-  adminView("orders");
+  if(!menu.length){ $("#dashMain") && ($("#dashMain").innerHTML=`<div class="panel"><div class="empty">لا توجد صلاحيات ممنوحة لك بعد. تواصل مع المالك.</div></div>`); return; }
+  const first = menu.find(m=>m.v===ADMIN_VIEW) ? ADMIN_VIEW : menu[0].v;
+  adminView(first);
 }
 function adminView(v) {
   ADMIN_VIEW = v;
-  ["orders","groups","withdrawals","marketers","products"].forEach(x=>{
-    const el=$("#av-"+x); if(el) el.classList.toggle("active",x===v);
-  });
+  allowedMenu().forEach(m=>{ const el=$("#av-"+m.v); if(el) el.classList.toggle("active",m.v===v); });
   if (v==="orders") adminOrders();
   if (v==="groups") adminGroups();
   if (v==="withdrawals") adminWithdrawals();
   if (v==="marketers") adminMarketers();
   if (v==="products") adminProducts();
+  if (v==="admins") adminAdmins();
 }
 let ORDER_FILTER_GROUP = "";
 async function adminOrders() {
@@ -405,15 +446,16 @@ async function adminOrders() {
   try {
     const q = ORDER_FILTER_GROUP ? "?group_id="+ORDER_FILTER_GROUP : "";
     const d=await api("/api/admin/orders"+q);
-    $("#aOrd").innerHTML = d.orders.length ? `<table><thead><tr><th>#</th><th>المسوّق</th><th>المجموعة</th><th>العميل</th><th>الإجمالي</th><th>العمولة</th><th>الحالة</th><th>تغيير</th></tr></thead><tbody>
-      ${d.orders.map(o=>`<tr><td>#${o.id}</td><td>${o.marketer_name}</td>
+    $("#aOrd").innerHTML = d.orders.length ? `<table><thead><tr><th>#</th><th>المسوّق</th><th>المجموعة</th><th>العميل</th><th>التقسيمة / المنطقة</th><th>السعر</th><th>التوصيل</th><th>الإجمالي</th><th>الحالة</th><th>تغيير</th></tr></thead><tbody>
+      ${d.orders.map(o=>{const del=o.delivery||0; const grand=(o.total||0)+del; return `<tr><td>#${o.id}</td><td>${o.marketer_name}</td>
         <td>${o.group_name?`<span class="badge b-confirmed">${o.group_name}</span>`:'<span class="muted">—</span>'}</td>
-        <td>${o.customer_name}<br><small class="muted">${o.customer_phone} — ${o.governorate||""}</small></td>
-        <td>${kd(o.total)}</td><td style="color:var(--green)">${kd(o.commission)}</td>
+        <td>${o.customer_name}<br><small class="muted">${o.customer_phone}</small></td>
+        <td>${o.area||"—"}<br><small class="muted">${o.zone||""}</small></td>
+        <td>${kd(o.total)}</td><td>${kd(del)}</td><td style="font-weight:700;color:var(--orange)">${kd(grand)}</td>
         <td><span class="badge b-${o.status}">${statusAr(o.status)}</span></td>
         <td><select onchange="updOrder(${o.id},this.value)">
           ${["pending","confirmed","shipped","delivered","cancelled"].map(s=>`<option value="${s}" ${s===o.status?"selected":""}>${statusAr(s)}</option>`).join("")}
-        </select></td></tr>`).join("")}
+        </select></td></tr>`;}).join("")}
     </tbody></table>` : `<div class="empty">لا توجد طلبات</div>`;
   } catch(e){ $("#aOrd").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
@@ -516,26 +558,27 @@ async function adminProducts(){
     <div id="pList" style="margin-top:16px">...</div></div>`;
   try{
     const d=await api("/api/admin/products");
-    $("#pList").innerHTML = d.products.length ? `<table><thead><tr><th>الصورة</th><th>المنتج</th><th>التكلفة</th><th>سعر البيع</th><th>العمولة</th><th>المخزون</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>
-      ${d.products.map(p=>`<tr>
+    const showW = d.can_see_wholesale;
+    $("#pList").innerHTML = d.products.length ? `<table><thead><tr><th>الصورة</th><th>المنتج</th>${showW?'<th>سعر الجملة</th>':''}<th>سعر البيع</th><th>عروض الكمية</th><th>المخزون</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>
+      ${d.products.map(p=>{const off=(p.offers||[]).map(o=>`${o.qty}:${kd(o.price)}`).join("، ")||"—"; return `<tr>
         <td><div style="width:48px;height:48px;border-radius:8px;overflow:hidden;background:#f3f4f6;display:grid;place-items:center;font-size:24px">${isImg(p.image)?`<img src="${p.image}" style="width:100%;height:100%;object-fit:cover">`:(p.image||"📦")}</div></td>
         <td><b>${p.name}</b><br><small class="muted">${p.category||""}</small></td>
-        <td>${kd(p.base_price)}</td>
-        <td>${kd(p.min_price)} - ${kd(p.max_price)}</td>
-        <td style="color:var(--green)">${kd(p.commission)}</td>
+        ${showW?`<td style="color:var(--teal);font-weight:700">${kd(p.wholesale_price)}</td>`:''}
+        <td style="font-weight:700">${kd(p.sell_price)}</td>
+        <td class="muted" style="font-size:13px">${off}</td>
         <td>${p.stock}</td>
         <td><span class="badge ${p.active?'b-active':'b-cancelled'}">${p.active?'ظاهر':'مخفي'}</span></td>
         <td style="white-space:nowrap">
           <button class="btn sm gray" onclick='adminProductForm(${JSON.stringify(p).replace(/'/g,"&#39;")})'>تعديل</button>
           <button class="btn sm ${p.active?'red':'green'}" onclick="toggleProduct(${p.id})">${p.active?'إخفاء':'إظهار'}</button>
-        </td></tr>`).join("")}
+        </td></tr>`;}).join("")}
     </tbody></table>` : `<div class="empty">لا توجد منتجات. اضغط «➕ إضافة منتج».</div>`;
   }catch(e){ $("#pList").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
 
 function adminProductForm(p){
   const edit = !!p;
-  UPLOADED_IMG = edit ? (isImg(p.image)?p.image:null) : null;
+  UPLOADED_IMG = edit ? (p.image||null) : null;
   const preview = isImg(p?.image) ? `<img id="imgPrev" src="${p.image}" style="max-width:140px;max-height:140px;border-radius:10px;border:1px solid var(--line)">` : `<div id="imgPrev" style="width:140px;height:140px;border-radius:10px;border:2px dashed var(--line);display:grid;place-items:center;font-size:40px;color:#9ca3af">🖼️</div>`;
   $("#dashMain").innerHTML=`<div class="panel">
     <div class="row-between"><h2 style="margin:0">${edit?'تعديل منتج':'إضافة منتج جديد'}</h2>
@@ -556,17 +599,21 @@ function adminProductForm(p){
       <div class="field"><label>الوصف</label><textarea id="apDesc" rows="2">${edit?escHtml(p.description||''):''}</textarea></div>
       <div class="field"><label>التصنيف</label><input id="apCat" value="${edit?escAttr(p.category||''):''}" placeholder="مثلاً: إلكترونيات"></div>
       <div class="row-between">
-        <div class="field" style="flex:1"><label>سعر التكلفة (د.ك)</label><input id="apBase" type="number" step="0.001" value="${edit?p.base_price:''}" required></div>
-        <div class="field" style="flex:1"><label>أقل سعر بيع</label><input id="apMin" type="number" step="0.001" value="${edit?p.min_price:''}" required></div>
-        <div class="field" style="flex:1"><label>أعلى سعر بيع</label><input id="apMax" type="number" step="0.001" value="${edit?p.max_price:''}" required></div>
-      </div>
-      <div class="row-between">
-        <div class="field" style="flex:1"><label>عمولة المسوّق (د.ك)</label><input id="apComm" type="number" step="0.001" value="${edit?p.commission:''}" required></div>
+        ${can("wholesale")?`<div class="field" style="flex:1"><label>💼 سعر الجملة (للأدمن فقط)</label><input id="apWholesale" type="number" step="0.001" value="${edit&&p.wholesale_price!=null?p.wholesale_price:''}" required></div>`:''}
+        <div class="field" style="flex:1"><label>🏷️ سعر البيع (يظهر للمسوّق)</label><input id="apSell" type="number" step="0.001" value="${edit?p.sell_price:''}" required></div>
         <div class="field" style="flex:1"><label>المخزون</label><input id="apStock" type="number" value="${edit?p.stock:100}" required></div>
+      </div>
+      <div class="field"><label>🎁 عروض الكمية (اختياري) — السعر الإجمالي للكمية</label>
+        <div class="row-between" style="gap:10px">
+          <div style="flex:1"><small class="muted">سعر القطعتين</small><input id="apOff2" type="number" step="0.001" value="${edit?offVal(p,2):''}" placeholder="إجمالي ٢ قطعة"></div>
+          <div style="flex:1"><small class="muted">سعر الـ٣</small><input id="apOff3" type="number" step="0.001" value="${edit?offVal(p,3):''}" placeholder="إجمالي ٣ قطع"></div>
+          <div style="flex:1"><small class="muted">سعر الـ٤</small><input id="apOff4" type="number" step="0.001" value="${edit?offVal(p,4):''}" placeholder="إجمالي ٤ قطع"></div>
+        </div>
       </div>
       <button class="btn">${edit?'حفظ التعديلات':'إضافة المنتج'}</button>
     </form></div>`;
 }
+function offVal(p, q){ const o=(p.offers||[]).find(x=>Number(x.qty)===q); return o?o.price:''; }
 
 function escAttr(s){ return String(s).replace(/"/g,"&quot;"); }
 function escHtml(s){ return String(s).replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
@@ -599,11 +646,16 @@ function pickImage(input){
 
 async function saveProduct(e, editId){
   e.preventDefault();
+  const offers=[];
+  [[2,"apOff2"],[3,"apOff3"],[4,"apOff4"]].forEach(([q,id])=>{
+    const el=$("#"+id); const v=el&&el.value?parseFloat(el.value):0;
+    if(v>0) offers.push({qty:q, price:v});
+  });
   const body={
     name:$("#apName").value, description:$("#apDesc").value, category:$("#apCat").value,
     image: UPLOADED_IMG || "📦",
-    base_price:$("#apBase").value, min_price:$("#apMin").value, max_price:$("#apMax").value,
-    commission:$("#apComm").value, stock:$("#apStock").value };
+    sell_price:$("#apSell").value, offers, stock:$("#apStock").value };
+  const wEl=$("#apWholesale"); if(wEl) body.wholesale_price=wEl.value;
   try{
     if(editId){ body.id=editId; await api("/api/admin/update-product",{method:"POST",body});
       toast("تم حفظ التعديلات ✅"); }
@@ -614,6 +666,62 @@ async function saveProduct(e, editId){
 }
 async function toggleProduct(id){
   try{ await api("/api/admin/toggle-product",{method:"POST",body:{id}}); toast("تم التحديث"); adminProducts(); }
+  catch(e){ toast(e.message); }
+}
+
+// ===== المدراء والصلاحيات (للمالك فقط) =====
+let PERM_CATALOG = {};
+async function adminAdmins(){
+  const m=$("#dashMain");
+  m.innerHTML=`<div class="panel"><h2>إضافة مدير جديد</h2><div id="adAlert"></div><div id="addAdminForm">...</div></div>
+    <div class="panel"><h2>المدراء الحاليون</h2><div id="adList">...</div></div>`;
+  try{
+    const d=await api("/api/admin/admins");
+    PERM_CATALOG=d.perm_catalog;
+    const permChecks = (selected)=>Object.entries(PERM_CATALOG).map(([k,label])=>
+      `<label style="display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0;font-weight:500">
+        <input type="checkbox" value="${k}" ${selected.includes(k)?"checked":""}> ${label}</label>`).join("");
+    $("#addAdminForm").innerHTML=`<form onsubmit="return addAdmin(event)">
+      <div class="row-between">
+        <div class="field" style="flex:1"><label>الاسم</label><input id="naName" required></div>
+        <div class="field" style="flex:1"><label>الإيميل</label><input id="naEmail" type="email" required></div>
+      </div>
+      <div class="row-between">
+        <div class="field" style="flex:1"><label>الهاتف</label><input id="naPhone"></div>
+        <div class="field" style="flex:1"><label>كلمة المرور (6 أحرف+)</label><input id="naPass" type="password" required></div>
+      </div>
+      <div class="field"><label>الصلاحيات</label><div id="naPerms" style="background:#f8fafc;border-radius:10px;padding:10px">${permChecks([])}</div></div>
+      <button class="btn">➕ إضافة المدير</button>
+    </form>`;
+    $("#adList").innerHTML = d.admins.map(a=>{
+      if(a.role==="owner") return `<div class="row-between" style="padding:12px;border-bottom:1px solid var(--line)">
+        <div><b>${a.name}</b> <span class="badge b-active">المالك</span><br><small class="muted">${a.email}</small></div>
+        <div class="muted">كل الصلاحيات</div></div>`;
+      return `<div style="padding:12px;border-bottom:1px solid var(--line)">
+        <div class="row-between"><div><b>${a.name}</b> <span class="badge ${a.status==='active'?'b-active':'b-banned'}">${a.status==='active'?'نشط':'موقوف'}</span><br><small class="muted">${a.email}</small></div>
+          <div><button class="btn sm ${a.status==='active'?'red':'green'}" onclick="toggleAdminStatus(${a.id},'${a.status==='active'?'banned':'active'}')">${a.status==='active'?'إيقاف':'تفعيل'}</button></div></div>
+        <div id="perms-${a.id}" style="margin-top:8px;background:#f8fafc;border-radius:10px;padding:10px">${permChecks(a.permissions)}</div>
+        <button class="btn sm blue" style="margin-top:8px" onclick="saveAdminPerms(${a.id})">حفظ صلاحياته</button>
+      </div>`;
+    }).join("");
+  }catch(e){ $("#adList").innerHTML=`<div class="empty">${e.message}</div>`; }
+}
+async function addAdmin(e){
+  e.preventDefault();
+  const perms=[...$("#naPerms").querySelectorAll("input:checked")].map(x=>x.value);
+  try{
+    await api("/api/admin/add-admin",{method:"POST",body:{name:$("#naName").value,email:$("#naEmail").value,phone:$("#naPhone").value,password:$("#naPass").value,permissions:perms}});
+    toast("تم إضافة المدير ✅"); adminAdmins();
+  }catch(err){ $("#adAlert").innerHTML=`<div class="alert err">${err.message}</div>`; }
+  return false;
+}
+async function saveAdminPerms(id){
+  const perms=[...$("#perms-"+id).querySelectorAll("input:checked")].map(x=>x.value);
+  try{ await api("/api/admin/update-admin",{method:"POST",body:{user_id:id,permissions:perms}}); toast("تم حفظ الصلاحيات ✅"); }
+  catch(e){ toast(e.message); }
+}
+async function toggleAdminStatus(id,status){
+  try{ await api("/api/admin/update-admin",{method:"POST",body:{user_id:id,status}}); toast("تم التحديث"); adminAdmins(); }
   catch(e){ toast(e.message); }
 }
 

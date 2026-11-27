@@ -17,6 +17,7 @@ import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+import kuwait
 from db import get_conn, init_db, hash_password, verify_password
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -92,8 +93,17 @@ def api_login(handler, body):
 
 
 def api_me(handler, user):
+    perms = []
+    if user["role"] == "owner":
+        perms = list(PERMISSIONS.keys())
+    else:
+        try:
+            perms = json.loads(user.get("permissions") or "[]")
+        except Exception:
+            perms = []
     return 200, {"id": user["id"], "name": user["name"], "email": user["email"],
-                 "phone": user["phone"], "role": user["role"], "balance": round(user["balance"], 3)}
+                 "phone": user["phone"], "role": user["role"], "balance": round(user["balance"], 3),
+                 "permissions": perms}
 
 
 def api_logout(handler, user):
@@ -106,23 +116,57 @@ def api_logout(handler, user):
     return 200, {"ok": True}
 
 
+def _offers_of(r):
+    try:
+        return json.loads(r["offers"] or "[]")
+    except Exception:
+        return []
+
+
+def public_product(r):
+    """نسخة المنتج اللي يشوفها المسوّق/الزائر — بدون سعر الجملة."""
+    return {"id": r["id"], "name": r["name"], "description": r["description"],
+            "category": r["category"], "image": r["image"], "sell_price": r["sell_price"],
+            "offers": _offers_of(r), "stock": r["stock"], "active": r["active"]}
+
+
 def api_products(handler, qs):
     conn = get_conn()
     rows = conn.execute("SELECT * FROM products WHERE active=1 ORDER BY id DESC").fetchall()
     conn.close()
-    return 200, {"products": [row_to_dict(r) for r in rows]}
+    return 200, {"products": [public_product(r) for r in rows]}
+
+
+def api_cities(handler, qs):
+    return 200, {"cities": kuwait.all_cities()}
+
+
+def line_price(product_row, qty):
+    """سعر سطر الطلب: لو فيه عرض كمية مطابق استخدمه، وإلا سعر البيع × الكمية."""
+    offers = _offers_of(product_row)
+    for o in offers:
+        try:
+            if int(o.get("qty")) == int(qty):
+                return float(o.get("price"))
+        except (ValueError, TypeError):
+            continue
+    return float(product_row["sell_price"]) * int(qty)
 
 
 def api_create_order(handler, user, body):
-    """المسوّق بيعمل طلب لعميل. items = [{product_id, qty, sell_price}]"""
+    """المسوّق بيعمل طلب لعميل. items = [{product_id, qty}] + customer{name,phone,city,address}"""
     items = body.get("items") or []
     cust = body.get("customer") or {}
     if not items or not cust.get("name") or not cust.get("phone") or not cust.get("address"):
         return 400, {"error": "بيانات الطلب أو العميل ناقصة"}
 
+    city = (cust.get("city") or "").strip()
+    zone = kuwait.zone_for(city)
+    delivery = kuwait.delivery_for(city) if city else kuwait.DEFAULT_DELIVERY
+
     conn = get_conn()
-    total = 0.0
-    total_comm = 0.0
+    subtotal = 0.0
+    total_wholesale = 0.0
     prepared = []
     for it in items:
         p = conn.execute("SELECT * FROM products WHERE id=? AND active=1", (it.get("product_id"),)).fetchone()
@@ -130,36 +174,40 @@ def api_create_order(handler, user, body):
             conn.close()
             return 400, {"error": "منتج غير موجود"}
         qty = max(1, int(it.get("qty", 1)))
-        sell = float(it.get("sell_price", p["min_price"]))
-        if sell < p["min_price"] or sell > p["max_price"]:
-            conn.close()
-            return 400, {"error": f"سعر «{p['name']}» لازم بين {p['min_price']} و {p['max_price']} د.ك"}
         if p["stock"] < qty:
             conn.close()
             return 400, {"error": f"الكمية غير متوفرة لـ «{p['name']}»"}
-        line_comm = p["commission"] * qty
-        total += sell * qty
-        total_comm += line_comm
-        prepared.append((p, qty, sell, line_comm))
+        lp = line_price(p, qty)                       # إجمالي سعر بيع السطر (يراعي عروض الكمية)
+        lw = float(p["wholesale_price"]) * qty        # إجمالي جملة السطر
+        subtotal += lp
+        total_wholesale += lw
+        prepared.append((p, qty, lp, lw))
+
+    # ربح المسوّق متوقف مؤقتًا (هيتظبط لاحقًا)
+    profit = 0.0
 
     grp = conn.execute("SELECT group_id FROM users WHERE id=?", (user["id"],)).fetchone()
     group_id = grp["group_id"] if grp else None
     cur = conn.execute(
-        """INSERT INTO orders (marketer_id,group_id,customer_name,customer_phone,customer_address,governorate,total,commission)
-           VALUES (?,?,?,?,?,?,?,?)""",
-        (user["id"], group_id, cust["name"], cust["phone"], cust["address"], cust.get("governorate", ""), total, total_comm),
+        """INSERT INTO orders (marketer_id,group_id,customer_name,customer_phone,customer_address,
+               governorate,area,zone,delivery,total,commission)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (user["id"], group_id, cust["name"], cust["phone"], cust["address"],
+         cust.get("governorate", ""), city, zone, delivery, subtotal, profit),
     )
     oid = cur.lastrowid
-    for p, qty, sell, line_comm in prepared:
+    for p, qty, lp, lw in prepared:
         conn.execute(
-            """INSERT INTO order_items (order_id,product_id,product_name,qty,sell_price,commission)
-               VALUES (?,?,?,?,?,?)""",
-            (oid, p["id"], p["name"], qty, sell, line_comm),
+            """INSERT INTO order_items (order_id,product_id,product_name,qty,sell_price,commission,wholesale)
+               VALUES (?,?,?,?,?,?,?)""",
+            (oid, p["id"], p["name"], qty, lp, 0.0, lw),
         )
         conn.execute("UPDATE products SET stock = stock - ? WHERE id=?", (qty, p["id"]))
     conn.commit()
     conn.close()
-    return 200, {"ok": True, "order_id": oid, "total": round(total, 3), "commission": round(total_comm, 3)}
+    grand = subtotal + delivery
+    return 200, {"ok": True, "order_id": oid, "subtotal": round(subtotal, 3),
+                 "delivery": round(delivery, 3), "total": round(grand, 3), "zone": zone}
 
 
 def api_my_orders(handler, user):
@@ -227,7 +275,37 @@ def api_my_withdrawals(handler, user):
 
 # ------------------------- معالِجات الأدمن -------------------------
 def require_admin(user):
-    return user and user["role"] == "admin"
+    return user and user["role"] in ("admin", "owner")
+
+
+def require_owner(user):
+    return user and user["role"] == "owner"
+
+
+# مفاتيح الصلاحيات ومسمياتها
+PERMISSIONS = {
+    "products": "إدارة المنتجات",
+    "wholesale": "رؤية سعر الجملة",
+    "orders": "إدارة الطلبات",
+    "export": "تحميل شيت الأوردرات",
+    "marketers": "إدارة المسوّقين",
+    "groups": "إدارة المجموعات",
+    "withdrawals": "إدارة طلبات السحب",
+}
+
+
+def has_perm(user, key):
+    if not user:
+        return False
+    if user["role"] == "owner":
+        return True
+    if user["role"] != "admin":
+        return False
+    try:
+        perms = json.loads(user.get("permissions") or "[]")
+    except Exception:
+        perms = []
+    return key in perms
 
 
 def api_admin_orders(handler, user, qs=None):
@@ -260,8 +338,8 @@ def api_admin_export_orders(handler, user, qs=None):
             group_id = None
     conn = get_conn()
     base = """SELECT o.id, o.created_at, u.name AS marketer_name, g.name AS group_name,
-                     o.customer_name, o.customer_phone, o.governorate, o.customer_address,
-                     o.total, o.commission, o.status
+                     o.customer_name, o.customer_phone, o.zone, o.area, o.customer_address,
+                     o.total, o.delivery, o.status
               FROM orders o
               JOIN users u ON u.id=o.marketer_id
               LEFT JOIN groups g ON g.id=o.group_id"""
@@ -272,22 +350,25 @@ def api_admin_export_orders(handler, user, qs=None):
     # عناصر كل أوردر كنص واحد
     items_map = {}
     for r in rows:
-        its = conn.execute("SELECT product_name, qty, sell_price FROM order_items WHERE order_id=?", (r["id"],)).fetchall()
-        items_map[r["id"]] = " | ".join(f"{i['product_name']} x{i['qty']} ({i['sell_price']})" for i in its)
+        its = conn.execute("SELECT product_name, qty FROM order_items WHERE order_id=?", (r["id"],)).fetchall()
+        items_map[r["id"]] = " | ".join(f"{i['product_name']} x{i['qty']}" for i in its)
     conn.close()
 
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["رقم الطلب", "التاريخ", "المسوّق", "المجموعة", "اسم العميل", "هاتف العميل",
-                "المحافظة", "العنوان", "المنتجات", "إجمالي البيع", "العمولة", "الحالة"])
+                "التقسيمة", "المنطقة", "العنوان", "المنتجات", "السعر", "التوصيل", "الإجمالي", "الحالة"])
     status_ar = {"pending": "قيد الانتظار", "confirmed": "مؤكد", "shipped": "قيد الشحن",
                  "delivered": "تم التسليم", "cancelled": "ملغي"}
     for r in rows:
+        price = r["total"] or 0
+        delivery = r["delivery"] or 0
+        grand = price + delivery
         w.writerow([r["id"], r["created_at"], r["marketer_name"], r["group_name"] or "—",
-                    r["customer_name"], r["customer_phone"], r["governorate"] or "", r["customer_address"],
-                    items_map.get(r["id"], ""), r["total"], r["commission"],
+                    r["customer_name"], r["customer_phone"], r["zone"] or "—", r["area"] or "",
+                    r["customer_address"], items_map.get(r["id"], ""),
+                    round(price, 3), round(delivery, 3), round(grand, 3),
                     status_ar.get(r["status"], r["status"])])
-    # BOM عشان العربي يظهر صح في Excel
     csv_text = "﻿" + buf.getvalue()
     return 200, {"_csv": csv_text, "filename": "orders.csv"}
 
@@ -408,15 +489,29 @@ def api_admin_upload_image(handler, user, body):
     return 200, {"url": f"/uploads/{fname}"}
 
 
+def _clean_offers(raw):
+    """يتحقق من عروض الكمية ويرجّعها كـ JSON نصّي."""
+    out = []
+    for o in (raw or []):
+        try:
+            q = int(o.get("qty"))
+            pr = float(o.get("price"))
+            if q >= 2 and pr > 0:
+                out.append({"qty": q, "price": pr})
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return json.dumps(out, ensure_ascii=False)
+
+
 def api_admin_add_product(handler, user, body):
     try:
         conn = get_conn()
         conn.execute(
-            """INSERT INTO products (name,description,category,image,base_price,min_price,max_price,commission,stock)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO products (name,description,category,image,wholesale_price,sell_price,offers,stock)
+               VALUES (?,?,?,?,?,?,?,?)""",
             (body["name"], body.get("description", ""), body.get("category", ""), body.get("image") or "📦",
-             float(body["base_price"]), float(body["min_price"]), float(body["max_price"]),
-             float(body["commission"]), int(body.get("stock", 100))),
+             float(body["wholesale_price"]), float(body["sell_price"]),
+             _clean_offers(body.get("offers")), int(body.get("stock", 100))),
         )
         conn.commit()
         conn.close()
@@ -426,10 +521,19 @@ def api_admin_add_product(handler, user, body):
 
 
 def api_admin_products(handler, user):
+    show_wholesale = has_perm(user, "wholesale")
     conn = get_conn()
     rows = conn.execute("SELECT * FROM products ORDER BY id DESC").fetchall()
     conn.close()
-    return 200, {"products": [row_to_dict(r) for r in rows]}
+    out = []
+    for r in rows:
+        d = {"id": r["id"], "name": r["name"], "description": r["description"],
+             "category": r["category"], "image": r["image"], "sell_price": r["sell_price"],
+             "offers": _offers_of(r), "stock": r["stock"], "active": r["active"]}
+        if show_wholesale:
+            d["wholesale_price"] = r["wholesale_price"]
+        out.append(d)
+    return 200, {"products": out, "can_see_wholesale": show_wholesale}
 
 
 def api_admin_update_product(handler, user, body):
@@ -438,13 +542,19 @@ def api_admin_update_product(handler, user, body):
         return 400, {"error": "منتج غير محدد"}
     try:
         conn = get_conn()
+        # لو المدير ماعندوش صلاحية الجملة، نحافظ على القيمة القديمة
+        if has_perm(user, "wholesale") and body.get("wholesale_price") not in (None, ""):
+            wholesale = float(body["wholesale_price"])
+        else:
+            cur = conn.execute("SELECT wholesale_price FROM products WHERE id=?", (pid,)).fetchone()
+            wholesale = cur["wholesale_price"] if cur else 0
         conn.execute(
             """UPDATE products SET name=?, description=?, category=?, image=?,
-                   base_price=?, min_price=?, max_price=?, commission=?, stock=?
+                   wholesale_price=?, sell_price=?, offers=?, stock=?
                WHERE id=?""",
             (body["name"], body.get("description", ""), body.get("category", ""), body.get("image") or "📦",
-             float(body["base_price"]), float(body["min_price"]), float(body["max_price"]),
-             float(body["commission"]), int(body.get("stock", 100)), pid),
+             wholesale, float(body["sell_price"]), _clean_offers(body.get("offers")),
+             int(body.get("stock", 100)), pid),
         )
         conn.commit()
         conn.close()
@@ -496,7 +606,65 @@ def api_admin_toggle_ban(handler, user, body):
 
 # ------------------------- التوجيه (Routing) -------------------------
 PUBLIC_POST = {"/api/register": api_register, "/api/login": api_login}
-PUBLIC_GET = {"/api/products": api_products}
+PUBLIC_GET = {"/api/products": api_products, "/api/cities": api_cities}
+
+def api_admin_list_admins(handler, user):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id,name,email,phone,status,role,permissions,created_at FROM users WHERE role IN ('admin','owner') ORDER BY id"
+    ).fetchall()
+    conn.close()
+    admins = []
+    for r in rows:
+        d = row_to_dict(r)
+        try:
+            d["permissions"] = json.loads(d.get("permissions") or "[]")
+        except Exception:
+            d["permissions"] = []
+        admins.append(d)
+    return 200, {"admins": admins, "perm_catalog": PERMISSIONS}
+
+
+def api_admin_add_admin(handler, user, body):
+    name = (body.get("name") or "").strip()
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password") or ""
+    perms = [p for p in (body.get("permissions") or []) if p in PERMISSIONS]
+    if not name or not email or len(password) < 6:
+        return 400, {"error": "البيانات ناقصة أو كلمة المرور أقل من 6 أحرف"}
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO users (name,email,phone,password,role,permissions) VALUES (?,?,?,?,'admin',?)",
+            (name, email, body.get("phone", ""), hash_password(password), json.dumps(perms, ensure_ascii=False)),
+        )
+        conn.commit()
+    except Exception:
+        conn.close()
+        return 409, {"error": "الإيميل مسجّل بالفعل"}
+    conn.close()
+    return 200, {"ok": True}
+
+
+def api_admin_update_admin(handler, user, body):
+    uid = body.get("user_id")
+    conn = get_conn()
+    target = conn.execute("SELECT role FROM users WHERE id=?", (uid,)).fetchone()
+    if not target:
+        conn.close()
+        return 404, {"error": "غير موجود"}
+    if target["role"] == "owner":
+        conn.close()
+        return 403, {"error": "لا يمكن تعديل المالك"}
+    if "permissions" in body:
+        perms = [p for p in (body.get("permissions") or []) if p in PERMISSIONS]
+        conn.execute("UPDATE users SET permissions=? WHERE id=?", (json.dumps(perms, ensure_ascii=False), uid))
+    if body.get("status") in ("active", "banned"):
+        conn.execute("UPDATE users SET status=? WHERE id=?", (body["status"], uid))
+    conn.commit()
+    conn.close()
+    return 200, {"ok": True}
+
 
 _DENY = (403, {"error": "ممنوع"})
 AUTH_GET = {
@@ -504,26 +672,29 @@ AUTH_GET = {
     "/api/my-orders": lambda h, u, q: api_my_orders(h, u),
     "/api/stats": lambda h, u, q: api_stats(h, u),
     "/api/my-withdrawals": lambda h, u, q: api_my_withdrawals(h, u),
-    "/api/admin/orders": lambda h, u, q: api_admin_orders(h, u, q) if require_admin(u) else _DENY,
-    "/api/admin/export-orders": lambda h, u, q: api_admin_export_orders(h, u, q) if require_admin(u) else _DENY,
-    "/api/admin/withdrawals": lambda h, u, q: api_admin_withdrawals(h, u) if require_admin(u) else _DENY,
-    "/api/admin/marketers": lambda h, u, q: api_admin_marketers(h, u) if require_admin(u) else _DENY,
-    "/api/admin/groups": lambda h, u, q: api_admin_groups(h, u) if require_admin(u) else _DENY,
-    "/api/admin/products": lambda h, u, q: api_admin_products(h, u) if require_admin(u) else _DENY,
+    "/api/admin/orders": lambda h, u, q: api_admin_orders(h, u, q) if has_perm(u, "orders") else _DENY,
+    "/api/admin/export-orders": lambda h, u, q: api_admin_export_orders(h, u, q) if has_perm(u, "export") else _DENY,
+    "/api/admin/withdrawals": lambda h, u, q: api_admin_withdrawals(h, u) if has_perm(u, "withdrawals") else _DENY,
+    "/api/admin/marketers": lambda h, u, q: api_admin_marketers(h, u) if has_perm(u, "marketers") else _DENY,
+    "/api/admin/groups": lambda h, u, q: api_admin_groups(h, u) if (has_perm(u, "groups") or has_perm(u, "marketers") or has_perm(u, "orders")) else _DENY,
+    "/api/admin/products": lambda h, u, q: api_admin_products(h, u) if has_perm(u, "products") else _DENY,
+    "/api/admin/admins": lambda h, u, q: api_admin_list_admins(h, u) if require_owner(u) else _DENY,
 }
 AUTH_POST = {
     "/api/logout": api_logout,
     "/api/orders": api_create_order,
     "/api/withdraw": api_withdraw,
-    "/api/admin/update-order": lambda h, u, b: api_admin_update_order(h, u, b) if require_admin(u) else _DENY,
-    "/api/admin/update-withdrawal": lambda h, u, b: api_admin_update_withdrawal(h, u, b) if require_admin(u) else _DENY,
-    "/api/admin/add-product": lambda h, u, b: api_admin_add_product(h, u, b) if require_admin(u) else _DENY,
-    "/api/admin/toggle-ban": lambda h, u, b: api_admin_toggle_ban(h, u, b) if require_admin(u) else _DENY,
-    "/api/admin/add-group": lambda h, u, b: api_admin_add_group(h, u, b) if require_admin(u) else _DENY,
-    "/api/admin/assign-group": lambda h, u, b: api_admin_assign_group(h, u, b) if require_admin(u) else _DENY,
-    "/api/admin/upload-image": lambda h, u, b: api_admin_upload_image(h, u, b) if require_admin(u) else _DENY,
-    "/api/admin/update-product": lambda h, u, b: api_admin_update_product(h, u, b) if require_admin(u) else _DENY,
-    "/api/admin/toggle-product": lambda h, u, b: api_admin_toggle_product(h, u, b) if require_admin(u) else _DENY,
+    "/api/admin/update-order": lambda h, u, b: api_admin_update_order(h, u, b) if has_perm(u, "orders") else _DENY,
+    "/api/admin/update-withdrawal": lambda h, u, b: api_admin_update_withdrawal(h, u, b) if has_perm(u, "withdrawals") else _DENY,
+    "/api/admin/add-product": lambda h, u, b: api_admin_add_product(h, u, b) if has_perm(u, "products") else _DENY,
+    "/api/admin/toggle-ban": lambda h, u, b: api_admin_toggle_ban(h, u, b) if has_perm(u, "marketers") else _DENY,
+    "/api/admin/add-group": lambda h, u, b: api_admin_add_group(h, u, b) if has_perm(u, "groups") else _DENY,
+    "/api/admin/assign-group": lambda h, u, b: api_admin_assign_group(h, u, b) if (has_perm(u, "groups") or has_perm(u, "marketers")) else _DENY,
+    "/api/admin/upload-image": lambda h, u, b: api_admin_upload_image(h, u, b) if has_perm(u, "products") else _DENY,
+    "/api/admin/update-product": lambda h, u, b: api_admin_update_product(h, u, b) if has_perm(u, "products") else _DENY,
+    "/api/admin/toggle-product": lambda h, u, b: api_admin_toggle_product(h, u, b) if has_perm(u, "products") else _DENY,
+    "/api/admin/add-admin": lambda h, u, b: api_admin_add_admin(h, u, b) if require_owner(u) else _DENY,
+    "/api/admin/update-admin": lambda h, u, b: api_admin_update_admin(h, u, b) if require_owner(u) else _DENY,
 }
 
 # المعالِجات اللي بتاخد body
