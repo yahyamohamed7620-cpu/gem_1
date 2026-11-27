@@ -14,6 +14,7 @@ import io
 import json
 import os
 import secrets
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -40,7 +41,8 @@ def current_user(handler):
     conn = get_conn()
     row = conn.execute(
         """SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
-           WHERE s.token = ?""",
+           WHERE s.token = ? AND s.created_at > datetime('now','-30 day')
+             AND u.status = 'active'""",
         (token,),
     ).fetchone()
     conn.close()
@@ -70,13 +72,31 @@ def api_register(handler, body):
     return 200, {"pending": True, "message": "تم التسجيل بنجاح! حسابك قيد المراجعة من الإدارة، هيتفعّل بعد الموافقة."}
 
 
+# حماية من تخمين كلمة المرور (brute-force)
+_login_attempts = {}
+
+
+def _rate_limited(key, limit=8, window=300):
+    now = time.time()
+    arr = [t for t in _login_attempts.get(key, []) if now - t < window]
+    _login_attempts[key] = arr
+    return len(arr) >= limit
+
+
+def _record_fail(key):
+    _login_attempts.setdefault(key, []).append(time.time())
+
+
 def api_login(handler, body):
     email = (body.get("email") or "").strip().lower()
     password = body.get("password") or ""
+    if _rate_limited(email):
+        return 429, {"error": "محاولات دخول كتيرة، استنى ٥ دقائق وجرّب تاني"}
     conn = get_conn()
     row = conn.execute("SELECT * FROM users WHERE email=? OR phone=?", (email, email)).fetchone()
     if not row or not verify_password(password, row["password"]):
         conn.close()
+        _record_fail(email)
         return 401, {"error": "الإيميل أو كلمة المرور غير صحيحة"}
     if row["status"] == "pending":
         conn.close()
@@ -91,6 +111,7 @@ def api_login(handler, body):
     conn.execute("INSERT INTO sessions (token,user_id) VALUES (?,?)", (token, row["id"]))
     conn.commit()
     conn.close()
+    _login_attempts.pop(email, None)
     u = row_to_dict(row)
     return 200, {"token": token, "user": {"id": u["id"], "name": u["name"], "email": u["email"], "role": u["role"], "balance": u["balance"]}}
 

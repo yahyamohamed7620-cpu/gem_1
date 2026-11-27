@@ -39,6 +39,8 @@ async function api(path, { method = "GET", body } = {}) {
 }
 
 function kd(n) { return Number(n).toFixed(3); }
+// تهريب أي بيانات من المستخدمين قبل عرضها (حماية من XSS)
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function syncNav() {
   if (USER) {
@@ -219,8 +221,8 @@ function productCard(p) {
   return `<div class="product" style="cursor:pointer" onclick="viewProduct(${p.id})">
     <div class="thumb">${thumbInner(p)}</div>
     <div class="body">
-      <span class="cat">${p.category || ""}</span>
-      <h4>${p.name}</h4>
+      <span class="cat">${esc(p.category)}</span>
+      <h4>${esc(p.name)}</h4>
       <div class="price-box">
         <span class="price">${kd(p.sell_price)} د.ك</span>
       </div>
@@ -249,9 +251,9 @@ async function viewProduct(pid){
     <div class="dash" style="grid-template-columns:1fr 1fr;align-items:start">
       <div class="panel" style="text-align:center;background:linear-gradient(135deg,#eef9f8,#fff3ec)">${big}${thumbs}</div>
       <div class="panel">
-        <span class="cat" style="color:var(--muted)">${p.category||""}</span>
-        <h1 style="color:var(--blue);font-size:28px;margin:6px 0 10px">${p.name}</h1>
-        <p class="muted" style="margin-bottom:14px">${p.description||""}</p>
+        <span class="cat" style="color:var(--muted)">${esc(p.category)}</span>
+        <h1 style="color:var(--blue);font-size:28px;margin:6px 0 10px">${esc(p.name)}</h1>
+        <p class="muted" style="margin-bottom:14px">${esc(p.description)}</p>
         <div class="price" style="font-size:30px;margin-bottom:14px">${kd(p.sell_price)} د.ك</div>
         ${offers?`<div style="margin-bottom:16px"><b>🎁 عروض الكمية:</b><br><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${offers}</div></div>`:""}
         <div class="row-between" style="margin:18px 0;padding:14px;background:#f8fafc;border-radius:12px">
@@ -338,9 +340,9 @@ function ordersTable(orders) {
   return `<table><thead><tr><th>#</th><th>العميل</th><th>المنطقة</th><th>المنتجات</th><th>السعر</th><th>التوصيل</th><th>الإجمالي</th><th>الحالة</th></tr></thead><tbody>
     ${orders.map(o=>{const del=o.delivery||0; const grand=(o.total||0)+del; return `<tr>
       <td>#${o.id}</td>
-      <td>${o.customer_name}<br><small class="muted">${o.customer_phone}</small></td>
-      <td>${o.area||"—"}<br><small class="muted">${o.zone||""}</small></td>
-      <td>${o.items.map(i=>`${i.product_name} ×${i.qty}`).join("<br>")}</td>
+      <td>${esc(o.customer_name)}<br><small class="muted">${esc(o.customer_phone)}</small></td>
+      <td>${esc(o.area)||"—"}<br><small class="muted">${esc(o.zone)}</small></td>
+      <td>${o.items.map(i=>`${esc(i.product_name)} ×${i.qty}`).join("<br>")}</td>
       <td>${kd(o.total)}</td>
       <td>${kd(del)}</td>
       <td style="font-weight:700;color:var(--orange)">${kd(grand)}</td>
@@ -520,7 +522,7 @@ async function adminPending(){
   try{
     const d=await api("/api/admin/pending");
     $("#pendList").innerHTML = d.pending.length ? `<table><thead><tr><th>الاسم</th><th>الإيميل</th><th>الهاتف</th><th>التاريخ</th><th>الإجراء</th></tr></thead><tbody>
-      ${d.pending.map(u=>`<tr><td><b>${u.name}</b></td><td class="muted">${u.email}</td><td>${u.phone||""}</td><td class="muted">${u.created_at}</td>
+      ${d.pending.map(u=>`<tr><td><b>${esc(u.name)}</b></td><td class="muted">${esc(u.email)}</td><td>${esc(u.phone)}</td><td class="muted">${u.created_at}</td>
         <td style="white-space:nowrap"><button class="btn green sm" onclick="approveUser(${u.id},'approve')">✔ موافقة</button>
         <button class="btn red sm" onclick="approveUser(${u.id},'reject')">✖ رفض</button></td></tr>`).join("")}
     </tbody></table>` : `<div class="empty">لا توجد طلبات تسجيل جديدة 👌</div>`;
@@ -589,7 +591,7 @@ function breakdownTable(title, arr){
   if(!arr||!arr.length) return "";
   return `<div class="panel"><h3 style="color:var(--blue);margin-bottom:12px">${title}</h3>
     <table><thead><tr><th>الاسم</th><th>الإجمالي</th><th>مؤكدة</th><th>مُسلّمة</th><th>مرتجعة</th><th>نسبة التسليم</th><th>المبيعات</th></tr></thead><tbody>
-    ${arr.map(x=>`<tr><td><b>${x.name}</b></td><td>${x.stats.total}</td><td>${x.stats.confirmed_total}</td>
+    ${arr.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${x.stats.total}</td><td>${x.stats.confirmed_total}</td>
       <td style="color:var(--green)">${x.stats.delivered}</td><td style="color:#9a3412">${x.stats.returned}</td>
       <td>${x.stats.deliver_rate}%</td><td>${kd(x.stats.sales)} د.ك</td></tr>`).join("")}
     </tbody></table></div>`;
@@ -604,7 +606,7 @@ async function loadAdminDash(){
   try{
     const d=await api("/api/dashboard"+dashQuery());
     let html = dashSectionTitle("📈 كل المنصة") + statCards(d.overall);
-    (d.by_group||[]).forEach(g=>{ html += dashSectionTitle("🗂️ مجموعة: "+g.name) + statCards(g.stats); });
+    (d.by_group||[]).forEach(g=>{ html += dashSectionTitle("🗂️ مجموعة: "+esc(g.name)) + statCards(g.stats); });
     html += dashSectionTitle("👥 حسب المسوّق") + breakdownTable("", d.by_marketer);
     $("#dashBody").innerHTML = html;
   }catch(e){ $("#dashBody").innerHTML=`<div class="empty">${e.message}</div>`; }
@@ -618,7 +620,7 @@ async function loadProductStats(){
   try{
     const d=await api("/api/admin/product-stats"+dashQuery());
     $("#dashBody").innerHTML = d.products.length ? `<div class="panel"><table><thead><tr><th>المنتج</th><th>عدد الأوردرات</th><th>الكمية</th><th>مؤكدة</th><th>مُسلّمة</th><th>معلّقة</th><th>مرتجعة</th><th>نسبة التسليم</th><th>نسبة المرتجع</th></tr></thead><tbody>
-      ${d.products.map(p=>`<tr><td><b>${p.name}</b></td><td>${p.total}</td><td>${p.qty}</td><td>${p.confirmed_total}</td>
+      ${d.products.map(p=>`<tr><td><b>${esc(p.name)}</b></td><td>${p.total}</td><td>${p.qty}</td><td>${p.confirmed_total}</td>
         <td style="color:var(--green)">${p.delivered}</td><td>${p.pending}</td><td style="color:#9a3412">${p.returned}</td>
         <td><b>${p.deliver_rate}%</b></td><td><b style="color:#9a3412">${p.return_rate}%</b></td></tr>`).join("")}
     </tbody></table></div>` : `<div class="empty">لا توجد بيانات منتجات بعد</div>`;
@@ -636,7 +638,7 @@ async function adminOrders() {
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:12px">
       <div class="field" style="margin:0;flex:1;min-width:150px"><label>بحث (اسم/هاتف)</label><input id="ofQ" value="${OF.q}" placeholder="رقم أو اسم العميل"></div>
       <div class="field" style="margin:0"><label>الحالة</label><select id="ofStatus">${['','pending','confirmed','shipped','delivered','returned','cancelled'].map(s=>`<option value="${s}" ${s===OF.status?'selected':''}>${s===''?'كل الحالات':statusAr(s)}</option>`).join('')}</select></div>
-      <div class="field" style="margin:0"><label>المجموعة</label><select id="ofGroup"><option value="">الكل</option>${groups.map(g=>`<option value="${g.id}" ${String(g.id)===OF.group?'selected':''}>${g.name}</option>`).join('')}</select></div>
+      <div class="field" style="margin:0"><label>المجموعة</label><select id="ofGroup"><option value="">الكل</option>${groups.map(g=>`<option value="${g.id}" ${String(g.id)===OF.group?'selected':''}>${esc(g.name)}</option>`).join('')}</select></div>
       <div class="field" style="margin:0"><label>من</label><input type="date" id="ofFrom" value="${OF.from}"></div>
       <div class="field" style="margin:0"><label>إلى</label><input type="date" id="ofTo" value="${OF.to}"></div>
       <button class="btn sm" onclick="applyOrderFilter()">تطبيق</button>
@@ -660,10 +662,10 @@ async function loadAdminOrders(){
     $("#aOrd").innerHTML = d.orders.length ? `<table><thead><tr><th><input type="checkbox" onclick="toggleAll(this.checked)"></th><th>#</th><th>المسوّق</th><th>المجموعة</th><th>العميل</th><th>المنطقة</th><th>الإجمالي</th><th>الحالة</th><th>تغيير</th><th>🖨️</th></tr></thead><tbody>
       ${d.orders.map(o=>{const del=o.delivery||0; const grand=(o.total||0)+del; return `<tr>
         <td><input type="checkbox" ${OSEL.has(o.id)?'checked':''} onclick="toggleSel(${o.id},this.checked)"></td>
-        <td>#${o.id}</td><td>${o.marketer_name}</td>
-        <td>${o.group_name?`<span class="badge b-confirmed">${o.group_name}</span>`:'<span class="muted">—</span>'}</td>
-        <td>${o.customer_name}<br><small class="muted">${o.customer_phone}</small></td>
-        <td>${o.area||"—"}<br><small class="muted">${o.zone||""}</small></td>
+        <td>#${o.id}</td><td>${esc(o.marketer_name)}</td>
+        <td>${o.group_name?`<span class="badge b-confirmed">${esc(o.group_name)}</span>`:'<span class="muted">—</span>'}</td>
+        <td>${esc(o.customer_name)}<br><small class="muted">${esc(o.customer_phone)}</small></td>
+        <td>${esc(o.area)||"—"}<br><small class="muted">${esc(o.zone)}</small></td>
         <td style="font-weight:700;color:var(--orange)">${kd(grand)}</td>
         <td><span class="badge b-${o.status}">${statusAr(o.status)}</span></td>
         <td><select onchange="updOrder(${o.id},this.value)">${ORDER_STATUSES.map(s=>`<option value="${s}" ${s===o.status?"selected":""}>${statusAr(s)}</option>`).join("")}</select></td>
@@ -684,23 +686,23 @@ async function bulkUpdate(){
 function printLabel(id){
   const o=ADMIN_ORDERS.find(x=>x.id===id); if(!o)return;
   const del=o.delivery||0; const grand=(o.total||0)+del;
-  const items=(o.items||[]).map(i=>`${i.product_name} × ${i.qty}`).join("<br>");
+  const items=(o.items||[]).map(i=>`${esc(i.product_name)} × ${i.qty}`).join("<br>");
   const w=window.open("","_blank","width=420,height=640");
   if(!w){ toast("اسمح بالنوافذ المنبثقة للطباعة"); return; }
   w.document.write(`<html dir="rtl"><head><meta charset="utf-8"><title>بوليصة #${o.id}</title>
     <style>body{font-family:Tahoma,Arial;padding:16px;color:#111}.box{border:2px solid #111;border-radius:10px;padding:14px}h2{margin:0 0 10px;text-align:center;color:#142b52}.row{display:flex;justify-content:space-between;gap:10px;border-bottom:1px dashed #aaa;padding:6px 0}.big{font-size:22px;font-weight:bold;text-align:center;margin-top:12px;border:2px solid #111;border-radius:8px;padding:10px}</style></head>
     <body><div class="box"><h2>Kuwait Market — بوليصة شحن</h2>
     <div class="row"><span>رقم الطلب</span><b>#${o.id}</b></div>
-    <div class="row"><span>العميل</span><b>${o.customer_name}</b></div>
-    <div class="row"><span>الهاتف</span><b>${o.customer_phone}</b></div>
-    <div class="row"><span>التقسيمة</span><b>${o.zone||''}</b></div>
-    <div class="row"><span>المنطقة</span><b>${o.area||''}</b></div>
-    <div class="row"><span>العنوان</span><b style="text-align:left">${o.customer_address||''}</b></div>
+    <div class="row"><span>العميل</span><b>${esc(o.customer_name)}</b></div>
+    <div class="row"><span>الهاتف</span><b>${esc(o.customer_phone)}</b></div>
+    <div class="row"><span>التقسيمة</span><b>${esc(o.zone)}</b></div>
+    <div class="row"><span>المنطقة</span><b>${esc(o.area)}</b></div>
+    <div class="row"><span>العنوان</span><b style="text-align:left">${esc(o.customer_address)}</b></div>
     <div class="row"><span>المنتجات</span><b style="text-align:left">${items}</b></div>
     <div class="row"><span>قيمة المنتجات</span><b>${kd(o.total)} د.ك</b></div>
     <div class="row"><span>التوصيل</span><b>${kd(del)} د.ك</b></div>
     <div class="big">المطلوب تحصيله: ${kd(grand)} د.ك</div>
-    <div class="row" style="margin-top:8px"><span>المسوّق</span><b>${o.marketer_name}</b></div>
+    <div class="row" style="margin-top:8px"><span>المسوّق</span><b>${esc(o.marketer_name)}</b></div>
     </div><scr`+`ipt>window.onload=function(){window.print()}</scr`+`ipt></body></html>`);
   w.document.close();
 }
@@ -731,16 +733,16 @@ async function adminGroups(){
     $("#gList").innerHTML = d.groups.length ? d.groups.map(g=>`
       <div style="padding:14px;border-bottom:1px solid var(--line)">
         <div class="row-between">
-          <div><b style="font-size:17px">${g.name}</b> <span class="badge b-confirmed">${g.members} عضو</span></div>
+          <div><b style="font-size:17px">${esc(g.name)}</b> <span class="badge b-confirmed">${g.members} عضو</span></div>
           <span class="muted" style="font-size:13px">${g.created_at}</span>
         </div>
         <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
           <span class="muted" style="font-size:14px">👑 قائد المجموعة:</span>
           <select onchange="setLeader(${g.id},this.value)" style="padding:6px 10px;border:1.5px solid var(--line);border-radius:8px">
             <option value="">— بدون قائد —</option>
-            ${(g.member_list||[]).map(u=>`<option value="${u.id}" ${g.leader_id===u.id?"selected":""}>${u.name}</option>`).join("")}
+            ${(g.member_list||[]).map(u=>`<option value="${u.id}" ${g.leader_id===u.id?"selected":""}>${esc(u.name)}</option>`).join("")}
           </select>
-          ${g.leader_name?`<span class="muted" style="font-size:13px">الحالي: <b>${g.leader_name}</b></span>`:""}
+          ${g.leader_name?`<span class="muted" style="font-size:13px">الحالي: <b>${esc(g.leader_name)}</b></span>`:""}
         </div>
       </div>`).join("")
       + `<p class="muted" style="margin-top:12px;padding:0 14px">القائد يشوف كل أرقام مجموعته. لإضافة أعضاء للمجموعة، روح لقسم «المسوّقين».</p>`
@@ -788,10 +790,10 @@ async function adminMarketers() {
     const d=await api("/api/admin/marketers");
     const grpSelect = (u)=>`<select onchange="assignGroup(${u.id},this.value)" style="padding:6px 8px;border:1.5px solid var(--line);border-radius:8px">
         <option value="">— بدون مجموعة —</option>
-        ${groups.map(g=>`<option value="${g.id}" ${u.group_id===g.id?"selected":""}>${g.name}</option>`).join("")}
+        ${groups.map(g=>`<option value="${g.id}" ${u.group_id===g.id?"selected":""}>${esc(g.name)}</option>`).join("")}
       </select>`;
     $("#aM").innerHTML = d.marketers.length ? `<table><thead><tr><th>#</th><th>الاسم</th><th>الإيميل</th><th>المجموعة</th><th>الرصيد</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>
-      ${d.marketers.map(u=>`<tr><td>#${u.id}</td><td>${u.name}<br><small class="muted">${u.phone||""}</small></td><td class="muted">${u.email}</td>
+      ${d.marketers.map(u=>`<tr><td>#${u.id}</td><td>${esc(u.name)}<br><small class="muted">${esc(u.phone)}</small></td><td class="muted">${esc(u.email)}</td>
         <td>${grpSelect(u)}</td>
         <td>${kd(u.balance)} د.ك</td><td><span class="badge b-${u.status}">${u.status==="active"?"نشط":"محظور"}</span></td>
         <td><button class="btn ${u.status==="active"?"red":"green"} sm" onclick="toggleBan(${u.id})">${u.status==="active"?"حظر":"فك الحظر"}</button></td></tr>`).join("")}
@@ -820,7 +822,7 @@ async function adminProducts(){
     $("#pList").innerHTML = d.products.length ? `<table><thead><tr><th>الصورة</th><th>المنتج</th>${showW?'<th>سعر الجملة</th>':''}<th>سعر البيع</th><th>عروض الكمية</th><th>المخزون</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>
       ${d.products.map(p=>{const off=(p.offers||[]).map(o=>`${o.qty}:${kd(o.price)}`).join("، ")||"—"; return `<tr>
         <td><div style="width:48px;height:48px;border-radius:8px;overflow:hidden;background:#f3f4f6;display:grid;place-items:center;font-size:24px">${isImg(p.image)?`<img src="${p.image}" style="width:100%;height:100%;object-fit:cover">`:(p.image||"📦")}</div></td>
-        <td><b>${p.name}</b><br><small class="muted">${p.category||""}</small></td>
+        <td><b>${esc(p.name)}</b><br><small class="muted">${esc(p.category)}</small></td>
         ${showW?`<td style="color:var(--teal);font-weight:700">${kd(p.wholesale_price)}</td>`:''}
         <td style="font-weight:700">${kd(p.sell_price)}</td>
         <td class="muted" style="font-size:13px">${off}</td>

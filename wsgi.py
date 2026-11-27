@@ -31,6 +31,20 @@ CTYPES = {
 }
 
 
+# رؤوس أمان تُضاف لكل الردود
+SEC_HEADERS = [
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Referrer-Policy", "no-referrer"),
+    ("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),
+    ("Content-Security-Policy",
+     "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+     "script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"),
+]
+
+_STATIC_REAL = os.path.realpath(STATIC_DIR)
+
+
 class _Shim:
     """كائن بسيط بيوفّر .headers زي اللي بتستخدمه دوال app.py."""
     def __init__(self, environ):
@@ -48,9 +62,12 @@ def _json(start_response, code, payload):
 
 
 def _file(start_response, path):
-    if not os.path.isfile(path):
+    # حماية من الخروج خارج مجلد static (path traversal)
+    real = os.path.realpath(path)
+    if not (real == _STATIC_REAL or real.startswith(_STATIC_REAL + os.sep)) or not os.path.isfile(real):
         start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
         return [b"Not Found"]
+    path = real
     ext = os.path.splitext(path)[1]
     ctype = CTYPES.get(ext, "application/octet-stream")
     with open(path, "rb") as f:
@@ -59,7 +76,11 @@ def _file(start_response, path):
     return [data]
 
 
-def application(environ, start_response):
+def application(environ, _start_response):
+    # إضافة رؤوس الأمان لكل رد
+    def start_response(status, headers):
+        return _start_response(status, headers + SEC_HEADERS)
+
     method = environ.get("REQUEST_METHOD", "GET")
     parsed = urlparse(environ.get("PATH_INFO", "/"))
     path = parsed.path
