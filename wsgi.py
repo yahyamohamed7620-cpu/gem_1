@@ -85,7 +85,15 @@ def application(environ, start_response):
             user = current_user(shim)
             if not user:
                 return _json(start_response, 401, {"error": "سجّل الدخول أولاً"})
-            code, payload = AUTH_GET[path](shim, user)
+            code, payload = AUTH_GET[path](shim, user, parse_qs(parsed.query))
+            if isinstance(payload, dict) and "_csv" in payload:
+                data = payload["_csv"].encode("utf-8")
+                start_response("200 OK", [
+                    ("Content-Type", "text/csv; charset=utf-8"),
+                    ("Content-Disposition", f'attachment; filename="{payload.get("filename", "export.csv")}"'),
+                    ("Content-Length", str(len(data))),
+                ])
+                return [data]
             return _json(start_response, code, payload)
         # ملفات ثابتة
         if path in ("/", ""):

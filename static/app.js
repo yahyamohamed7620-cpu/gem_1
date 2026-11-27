@@ -364,6 +364,7 @@ function renderAdmin() {
     <aside class="side">
       <div class="u"><div class="av" style="background:var(--blue)">${USER.name[0]}</div><div><b>${USER.name}</b><br><small class="muted">أدمن</small></div></div>
       <a onclick="adminView('orders')" id="av-orders">📦 الطلبات</a>
+      <a onclick="adminView('groups')" id="av-groups">🗂️ المجموعات</a>
       <a onclick="adminView('withdrawals')" id="av-withdrawals">💳 طلبات السحب</a>
       <a onclick="adminView('marketers')" id="av-marketers">👥 المسوّقين</a>
       <a onclick="adminView('addprod')" id="av-addprod">➕ إضافة منتج</a>
@@ -374,20 +375,37 @@ function renderAdmin() {
 }
 function adminView(v) {
   ADMIN_VIEW = v;
-  ["orders","withdrawals","marketers","addprod"].forEach(x=>{
+  ["orders","groups","withdrawals","marketers","addprod"].forEach(x=>{
     const el=$("#av-"+x); if(el) el.classList.toggle("active",x===v);
   });
   if (v==="orders") adminOrders();
+  if (v==="groups") adminGroups();
   if (v==="withdrawals") adminWithdrawals();
   if (v==="marketers") adminMarketers();
   if (v==="addprod") adminAddProduct();
 }
+let ORDER_FILTER_GROUP = "";
 async function adminOrders() {
-  const m=$("#dashMain"); m.innerHTML=`<div class="panel"><h2>كل الطلبات</h2><div id="aOrd">...</div></div>`;
+  const m=$("#dashMain");
+  // حمّل المجموعات للفلتر
+  let groups=[]; try{ groups=(await api("/api/admin/groups")).groups; }catch(e){}
+  const opts = `<option value="">كل المجموعات</option>` +
+    groups.map(g=>`<option value="${g.id}" ${String(g.id)===ORDER_FILTER_GROUP?"selected":""}>${g.name}</option>`).join("");
+  m.innerHTML=`<div class="panel">
+    <div class="row-between" style="margin-bottom:14px">
+      <h2 style="margin:0">كل الطلبات</h2>
+      <div style="display:flex;gap:10px;align-items:center">
+        <select id="grpFilter" onchange="filterOrders(this.value)" style="padding:8px 12px;border:1.5px solid var(--line);border-radius:10px">${opts}</select>
+        <button class="btn green sm" onclick="exportOrders()">⬇️ تحميل شيت Excel</button>
+      </div>
+    </div>
+    <div id="aOrd">...</div></div>`;
   try {
-    const d=await api("/api/admin/orders");
-    $("#aOrd").innerHTML = d.orders.length ? `<table><thead><tr><th>#</th><th>المسوّق</th><th>العميل</th><th>الإجمالي</th><th>العمولة</th><th>الحالة</th><th>تغيير</th></tr></thead><tbody>
+    const q = ORDER_FILTER_GROUP ? "?group_id="+ORDER_FILTER_GROUP : "";
+    const d=await api("/api/admin/orders"+q);
+    $("#aOrd").innerHTML = d.orders.length ? `<table><thead><tr><th>#</th><th>المسوّق</th><th>المجموعة</th><th>العميل</th><th>الإجمالي</th><th>العمولة</th><th>الحالة</th><th>تغيير</th></tr></thead><tbody>
       ${d.orders.map(o=>`<tr><td>#${o.id}</td><td>${o.marketer_name}</td>
+        <td>${o.group_name?`<span class="badge b-confirmed">${o.group_name}</span>`:'<span class="muted">—</span>'}</td>
         <td>${o.customer_name}<br><small class="muted">${o.customer_phone} — ${o.governorate||""}</small></td>
         <td>${kd(o.total)}</td><td style="color:var(--green)">${kd(o.commission)}</td>
         <td><span class="badge b-${o.status}">${statusAr(o.status)}</span></td>
@@ -396,6 +414,46 @@ async function adminOrders() {
         </select></td></tr>`).join("")}
     </tbody></table>` : `<div class="empty">لا توجد طلبات</div>`;
   } catch(e){ $("#aOrd").innerHTML=`<div class="empty">${e.message}</div>`; }
+}
+function filterOrders(v){ ORDER_FILTER_GROUP=v; adminOrders(); }
+async function exportOrders(){
+  try{
+    const q = ORDER_FILTER_GROUP ? "?group_id="+ORDER_FILTER_GROUP : "";
+    const res = await fetch("/api/admin/export-orders"+q, { headers:{ "Authorization":"Bearer "+TOKEN }});
+    if(!res.ok){ toast("فشل التحميل"); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href=url; a.download="orders.csv"; document.body.appendChild(a); a.click();
+    a.remove(); URL.revokeObjectURL(url);
+    toast("تم تحميل الشيت ✅");
+  }catch(e){ toast("فشل التحميل: "+e.message); }
+}
+async function adminGroups(){
+  const m=$("#dashMain");
+  m.innerHTML=`<div class="panel">
+    <h2>إضافة مجموعة جديدة</h2>
+    <div id="gAlert"></div>
+    <form onsubmit="return addGroup(event)" style="display:flex;gap:10px;align-items:end">
+      <div class="field" style="flex:1;margin:0"><label>اسم المجموعة / الصفة</label><input id="gName" placeholder="مثلاً: فريق القاهرة" required></div>
+      <button class="btn">➕ إضافة</button>
+    </form>
+  </div>
+  <div class="panel"><h2>المجموعات</h2><div id="gList">...</div></div>`;
+  try{
+    const d=await api("/api/admin/groups");
+    $("#gList").innerHTML = d.groups.length ? `<table><thead><tr><th>#</th><th>اسم المجموعة</th><th>عدد الأعضاء</th><th>تاريخ الإنشاء</th></tr></thead><tbody>
+      ${d.groups.map(g=>`<tr><td>#${g.id}</td><td><b>${g.name}</b></td><td>${g.members}</td><td class="muted">${g.created_at}</td></tr>`).join("")}
+    </tbody></table><p class="muted" style="margin-top:12px">لتعيين المسوّقين للمجموعات، روح لقسم «المسوّقين».</p>`
+      : `<div class="empty">لا توجد مجموعات بعد. اعمل أول مجموعة فوق.</div>`;
+  }catch(e){ $("#gList").innerHTML=`<div class="empty">${e.message}</div>`; }
+}
+async function addGroup(e){
+  e.preventDefault();
+  try{ await api("/api/admin/add-group",{method:"POST",body:{name:$("#gName").value}});
+    toast("تمت إضافة المجموعة ✅"); adminGroups();
+  }catch(err){ $("#gAlert").innerHTML=`<div class="alert err">${err.message}</div>`; }
+  return false;
 }
 async function updOrder(id,status){
   try { await api("/api/admin/update-order",{method:"POST",body:{order_id:id,status}});
@@ -422,13 +480,24 @@ async function updW(id,status){
 async function adminMarketers() {
   const m=$("#dashMain"); m.innerHTML=`<div class="panel"><h2>المسوّقين</h2><div id="aM">...</div></div>`;
   try {
+    let groups=[]; try{ groups=(await api("/api/admin/groups")).groups; }catch(e){}
     const d=await api("/api/admin/marketers");
-    $("#aM").innerHTML = d.marketers.length ? `<table><thead><tr><th>#</th><th>الاسم</th><th>الإيميل</th><th>الهاتف</th><th>الرصيد</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>
-      ${d.marketers.map(u=>`<tr><td>#${u.id}</td><td>${u.name}</td><td class="muted">${u.email}</td><td>${u.phone||""}</td>
+    const grpSelect = (u)=>`<select onchange="assignGroup(${u.id},this.value)" style="padding:6px 8px;border:1.5px solid var(--line);border-radius:8px">
+        <option value="">— بدون مجموعة —</option>
+        ${groups.map(g=>`<option value="${g.id}" ${u.group_id===g.id?"selected":""}>${g.name}</option>`).join("")}
+      </select>`;
+    $("#aM").innerHTML = d.marketers.length ? `<table><thead><tr><th>#</th><th>الاسم</th><th>الإيميل</th><th>المجموعة</th><th>الرصيد</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>
+      ${d.marketers.map(u=>`<tr><td>#${u.id}</td><td>${u.name}<br><small class="muted">${u.phone||""}</small></td><td class="muted">${u.email}</td>
+        <td>${grpSelect(u)}</td>
         <td>${kd(u.balance)} د.ك</td><td><span class="badge b-${u.status}">${u.status==="active"?"نشط":"محظور"}</span></td>
         <td><button class="btn ${u.status==="active"?"red":"green"} sm" onclick="toggleBan(${u.id})">${u.status==="active"?"حظر":"فك الحظر"}</button></td></tr>`).join("")}
-    </tbody></table>` : `<div class="empty">لا يوجد مسوّقين</div>`;
+    </tbody></table>${groups.length?"":`<p class="muted" style="margin-top:12px">اعمل مجموعات أولاً من قسم «المجموعات» عشان تقدر تعيّن المسوّقين.</p>`}` : `<div class="empty">لا يوجد مسوّقين</div>`;
   } catch(e){ $("#aM").innerHTML=`<div class="empty">${e.message}</div>`; }
+}
+async function assignGroup(uid,gid){
+  try{ await api("/api/admin/assign-group",{method:"POST",body:{user_id:uid,group_id:gid||null}});
+    toast("تم تحديث المجموعة ✅");
+  }catch(e){ toast(e.message); }
 }
 async function toggleBan(id){
   try{ const r=await api("/api/admin/toggle-ban",{method:"POST",body:{user_id:id}});

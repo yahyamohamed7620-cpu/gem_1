@@ -40,6 +40,12 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS groups (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT UNIQUE NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS users (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT NOT NULL,
@@ -49,6 +55,7 @@ CREATE TABLE IF NOT EXISTS users (
     role        TEXT NOT NULL DEFAULT 'marketer',   -- marketer | admin
     status      TEXT NOT NULL DEFAULT 'active',       -- active | banned
     balance     REAL NOT NULL DEFAULT 0,              -- رصيد العمولة القابل للسحب
+    group_id    INTEGER REFERENCES groups(id),        -- المجموعة/الفريق التابع له
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -70,6 +77,7 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE TABLE IF NOT EXISTS orders (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     marketer_id   INTEGER NOT NULL REFERENCES users(id),
+    group_id      INTEGER REFERENCES groups(id),      -- مجموعة المسوّق وقت الطلب
     customer_name TEXT NOT NULL,
     customer_phone TEXT NOT NULL,
     customer_address TEXT NOT NULL,
@@ -117,9 +125,23 @@ CREATE TABLE IF NOT EXISTS sessions (
 """
 
 
+def _column_exists(conn, table, col):
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(r["name"] == col for r in rows)
+
+
+def migrate(conn):
+    """ترحيل آمن للقواعد القديمة: يضيف الأعمدة الجديدة لو مش موجودة."""
+    if not _column_exists(conn, "users", "group_id"):
+        conn.execute("ALTER TABLE users ADD COLUMN group_id INTEGER")
+    if not _column_exists(conn, "orders", "group_id"):
+        conn.execute("ALTER TABLE orders ADD COLUMN group_id INTEGER")
+
+
 def init_db():
     conn = get_conn()
     conn.executescript(SCHEMA)
+    migrate(conn)
     conn.commit()
     conn.close()
 

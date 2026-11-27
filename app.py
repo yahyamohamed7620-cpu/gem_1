@@ -8,6 +8,8 @@ Kuwait Market — منصة دروبشيبينج.
 
 API يرجع JSON. الواجهات ملفات ثابتة في مجلد static/.
 """
+import csv
+import io
 import json
 import os
 import secrets
@@ -139,10 +141,12 @@ def api_create_order(handler, user, body):
         total_comm += line_comm
         prepared.append((p, qty, sell, line_comm))
 
+    grp = conn.execute("SELECT group_id FROM users WHERE id=?", (user["id"],)).fetchone()
+    group_id = grp["group_id"] if grp else None
     cur = conn.execute(
-        """INSERT INTO orders (marketer_id,customer_name,customer_phone,customer_address,governorate,total,commission)
-           VALUES (?,?,?,?,?,?,?)""",
-        (user["id"], cust["name"], cust["phone"], cust["address"], cust.get("governorate", ""), total, total_comm),
+        """INSERT INTO orders (marketer_id,group_id,customer_name,customer_phone,customer_address,governorate,total,commission)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (user["id"], group_id, cust["name"], cust["phone"], cust["address"], cust.get("governorate", ""), total, total_comm),
     )
     oid = cur.lastrowid
     for p, qty, sell, line_comm in prepared:
@@ -225,14 +229,102 @@ def require_admin(user):
     return user and user["role"] == "admin"
 
 
-def api_admin_orders(handler, user):
+def api_admin_orders(handler, user, qs=None):
+    group_id = None
+    if qs and qs.get("group_id"):
+        try:
+            group_id = int(qs["group_id"][0])
+        except (ValueError, TypeError):
+            group_id = None
     conn = get_conn()
-    rows = conn.execute(
-        """SELECT o.*, u.name AS marketer_name FROM orders o
-           JOIN users u ON u.id=o.marketer_id ORDER BY o.id DESC"""
-    ).fetchall()
+    base = """SELECT o.*, u.name AS marketer_name, g.name AS group_name
+             FROM orders o
+             JOIN users u ON u.id=o.marketer_id
+             LEFT JOIN groups g ON g.id=o.group_id"""
+    if group_id:
+        rows = conn.execute(base + " WHERE o.group_id=? ORDER BY o.id DESC", (group_id,)).fetchall()
+    else:
+        rows = conn.execute(base + " ORDER BY o.id DESC").fetchall()
     conn.close()
     return 200, {"orders": [row_to_dict(r) for r in rows]}
+
+
+def api_admin_export_orders(handler, user, qs=None):
+    """تصدير الأوردرات كـ CSV (يفتح على Excel). فلتر اختياري بالمجموعة."""
+    group_id = None
+    if qs and qs.get("group_id"):
+        try:
+            group_id = int(qs["group_id"][0])
+        except (ValueError, TypeError):
+            group_id = None
+    conn = get_conn()
+    base = """SELECT o.id, o.created_at, u.name AS marketer_name, g.name AS group_name,
+                     o.customer_name, o.customer_phone, o.governorate, o.customer_address,
+                     o.total, o.commission, o.status
+              FROM orders o
+              JOIN users u ON u.id=o.marketer_id
+              LEFT JOIN groups g ON g.id=o.group_id"""
+    if group_id:
+        rows = conn.execute(base + " WHERE o.group_id=? ORDER BY o.id DESC", (group_id,)).fetchall()
+    else:
+        rows = conn.execute(base + " ORDER BY o.id DESC").fetchall()
+    # عناصر كل أوردر كنص واحد
+    items_map = {}
+    for r in rows:
+        its = conn.execute("SELECT product_name, qty, sell_price FROM order_items WHERE order_id=?", (r["id"],)).fetchall()
+        items_map[r["id"]] = " | ".join(f"{i['product_name']} x{i['qty']} ({i['sell_price']})" for i in its)
+    conn.close()
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["رقم الطلب", "التاريخ", "المسوّق", "المجموعة", "اسم العميل", "هاتف العميل",
+                "المحافظة", "العنوان", "المنتجات", "إجمالي البيع", "العمولة", "الحالة"])
+    status_ar = {"pending": "قيد الانتظار", "confirmed": "مؤكد", "shipped": "قيد الشحن",
+                 "delivered": "تم التسليم", "cancelled": "ملغي"}
+    for r in rows:
+        w.writerow([r["id"], r["created_at"], r["marketer_name"], r["group_name"] or "—",
+                    r["customer_name"], r["customer_phone"], r["governorate"] or "", r["customer_address"],
+                    items_map.get(r["id"], ""), r["total"], r["commission"],
+                    status_ar.get(r["status"], r["status"])])
+    # BOM عشان العربي يظهر صح في Excel
+    csv_text = "﻿" + buf.getvalue()
+    return 200, {"_csv": csv_text, "filename": "orders.csv"}
+
+
+def api_admin_groups(handler, user):
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT g.*, (SELECT COUNT(*) FROM users u WHERE u.group_id=g.id) AS members
+           FROM groups g ORDER BY g.id DESC"""
+    ).fetchall()
+    conn.close()
+    return 200, {"groups": [row_to_dict(r) for r in rows]}
+
+
+def api_admin_add_group(handler, user, body):
+    name = (body.get("name") or "").strip()
+    if not name:
+        return 400, {"error": "اكتب اسم المجموعة"}
+    conn = get_conn()
+    try:
+        conn.execute("INSERT INTO groups (name) VALUES (?)", (name,))
+        conn.commit()
+    except Exception:
+        conn.close()
+        return 409, {"error": "فيه مجموعة بنفس الاسم"}
+    conn.close()
+    return 200, {"ok": True}
+
+
+def api_admin_assign_group(handler, user, body):
+    uid = body.get("user_id")
+    gid = body.get("group_id")  # ممكن تبقى None/فاضية = بدون مجموعة
+    gid = int(gid) if gid else None
+    conn = get_conn()
+    conn.execute("UPDATE users SET group_id=? WHERE id=? AND role='marketer'", (gid, uid))
+    conn.commit()
+    conn.close()
+    return 200, {"ok": True}
 
 
 def api_admin_update_order(handler, user, body):
@@ -309,7 +401,10 @@ def api_admin_add_product(handler, user, body):
 def api_admin_marketers(handler, user):
     conn = get_conn()
     rows = conn.execute(
-        "SELECT id,name,email,phone,status,balance,created_at FROM users WHERE role='marketer' ORDER BY id DESC"
+        """SELECT u.id,u.name,u.email,u.phone,u.status,u.balance,u.created_at,
+                  u.group_id, g.name AS group_name
+           FROM users u LEFT JOIN groups g ON g.id=u.group_id
+           WHERE u.role='marketer' ORDER BY u.id DESC"""
     ).fetchall()
     conn.close()
     return 200, {"marketers": [row_to_dict(r) for r in rows]}
@@ -333,23 +428,28 @@ def api_admin_toggle_ban(handler, user, body):
 PUBLIC_POST = {"/api/register": api_register, "/api/login": api_login}
 PUBLIC_GET = {"/api/products": api_products}
 
+_DENY = (403, {"error": "ممنوع"})
 AUTH_GET = {
-    "/api/me": api_me,
-    "/api/my-orders": api_my_orders,
-    "/api/stats": api_stats,
-    "/api/my-withdrawals": api_my_withdrawals,
-    "/api/admin/orders": lambda h, u: api_admin_orders(h, u) if require_admin(u) else (403, {"error": "ممنوع"}),
-    "/api/admin/withdrawals": lambda h, u: api_admin_withdrawals(h, u) if require_admin(u) else (403, {"error": "ممنوع"}),
-    "/api/admin/marketers": lambda h, u: api_admin_marketers(h, u) if require_admin(u) else (403, {"error": "ممنوع"}),
+    "/api/me": lambda h, u, q: api_me(h, u),
+    "/api/my-orders": lambda h, u, q: api_my_orders(h, u),
+    "/api/stats": lambda h, u, q: api_stats(h, u),
+    "/api/my-withdrawals": lambda h, u, q: api_my_withdrawals(h, u),
+    "/api/admin/orders": lambda h, u, q: api_admin_orders(h, u, q) if require_admin(u) else _DENY,
+    "/api/admin/export-orders": lambda h, u, q: api_admin_export_orders(h, u, q) if require_admin(u) else _DENY,
+    "/api/admin/withdrawals": lambda h, u, q: api_admin_withdrawals(h, u) if require_admin(u) else _DENY,
+    "/api/admin/marketers": lambda h, u, q: api_admin_marketers(h, u) if require_admin(u) else _DENY,
+    "/api/admin/groups": lambda h, u, q: api_admin_groups(h, u) if require_admin(u) else _DENY,
 }
 AUTH_POST = {
     "/api/logout": api_logout,
     "/api/orders": api_create_order,
     "/api/withdraw": api_withdraw,
-    "/api/admin/update-order": lambda h, u, b: api_admin_update_order(h, u, b) if require_admin(u) else (403, {"error": "ممنوع"}),
-    "/api/admin/update-withdrawal": lambda h, u, b: api_admin_update_withdrawal(h, u, b) if require_admin(u) else (403, {"error": "ممنوع"}),
-    "/api/admin/add-product": lambda h, u, b: api_admin_add_product(h, u, b) if require_admin(u) else (403, {"error": "ممنوع"}),
-    "/api/admin/toggle-ban": lambda h, u, b: api_admin_toggle_ban(h, u, b) if require_admin(u) else (403, {"error": "ممنوع"}),
+    "/api/admin/update-order": lambda h, u, b: api_admin_update_order(h, u, b) if require_admin(u) else _DENY,
+    "/api/admin/update-withdrawal": lambda h, u, b: api_admin_update_withdrawal(h, u, b) if require_admin(u) else _DENY,
+    "/api/admin/add-product": lambda h, u, b: api_admin_add_product(h, u, b) if require_admin(u) else _DENY,
+    "/api/admin/toggle-ban": lambda h, u, b: api_admin_toggle_ban(h, u, b) if require_admin(u) else _DENY,
+    "/api/admin/add-group": lambda h, u, b: api_admin_add_group(h, u, b) if require_admin(u) else _DENY,
+    "/api/admin/assign-group": lambda h, u, b: api_admin_assign_group(h, u, b) if require_admin(u) else _DENY,
 }
 
 # المعالِجات اللي بتاخد body
@@ -361,6 +461,15 @@ class Handler(BaseHTTPRequestHandler):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_csv(self, text, filename):
+        data = text.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -408,8 +517,9 @@ class Handler(BaseHTTPRequestHandler):
             user = current_user(self)
             if not user:
                 return self._send(401, {"error": "سجّل الدخول أولاً"})
-            res = AUTH_GET[path](self, user)
-            code, payload = res
+            code, payload = AUTH_GET[path](self, user, parse_qs(parsed.query))
+            if isinstance(payload, dict) and "_csv" in payload:
+                return self._send_csv(payload["_csv"], payload.get("filename", "export.csv"))
             return self._send(code, payload)
 
         # ملفات ثابتة
