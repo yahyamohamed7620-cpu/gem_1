@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS products (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     name         TEXT NOT NULL,
+    code         TEXT,                     -- كود المنتج (للربط بالإعلانات)
     description  TEXT,
     category     TEXT,
     image        TEXT,
@@ -156,6 +157,7 @@ def migrate(conn):
     add("products", "sell_price", "REAL NOT NULL DEFAULT 0")
     add("products", "offers", "TEXT NOT NULL DEFAULT '[]'")
     add("products", "images", "TEXT NOT NULL DEFAULT '[]'")
+    add("products", "code", "TEXT")
     add("order_items", "wholesale", "REAL NOT NULL DEFAULT 0")
     add("groups", "leader_id", "INTEGER")
 

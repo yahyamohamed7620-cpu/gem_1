@@ -632,11 +632,14 @@ async function adminProductStats(){
 async function loadProductStats(){
   try{
     const d=await api("/api/admin/product-stats"+dashQuery());
-    $("#dashBody").innerHTML = d.products.length ? `<div class="panel"><table><thead><tr><th>المنتج</th><th>عدد الأوردرات</th><th>الكمية</th><th>مؤكدة</th><th>مُسلّمة</th><th>معلّقة</th><th>مرتجعة</th><th>نسبة التسليم</th><th>نسبة المرتجع</th></tr></thead><tbody>
-      ${d.products.map(p=>`<tr><td><b>${esc(p.name)}</b></td><td>${p.total}</td><td>${p.qty}</td><td>${p.confirmed_total}</td>
-        <td style="color:var(--green)">${p.delivered}</td><td>${p.pending}</td><td style="color:#9a3412">${p.returned}</td>
-        <td><b>${p.deliver_rate}%</b></td><td><b style="color:#9a3412">${p.return_rate}%</b></td></tr>`).join("")}
-    </tbody></table></div>` : `<div class="empty">لا توجد بيانات منتجات بعد</div>`;
+    $("#dashBody").innerHTML = d.products.length ? `<div class="panel" style="overflow-x:auto"><table><thead><tr><th>المنتج</th><th>الكود</th><th>أوردرات</th><th>مُسلّمة</th><th>ملغية</th><th>مرتجعة</th><th>نسبة التسليم</th><th>نسبة الإلغاء</th><th>إيراد المُسلّم</th><th>تكلفة الجملة</th><th>ربح المنتج</th></tr></thead><tbody>
+      ${d.products.map(p=>`<tr><td><b>${esc(p.name)}</b></td><td class="muted">${esc(p.code)||'—'}</td><td>${p.total}</td>
+        <td style="color:var(--green)">${p.delivered}</td><td style="color:var(--red)">${p.cancelled}</td><td style="color:#9a3412">${p.returned}</td>
+        <td><b>${p.deliver_rate}%</b></td><td><b style="color:var(--red)">${p.cancel_rate}%</b></td>
+        <td>${kd(p.revenue)}</td><td class="muted">${kd(p.cogs)}</td>
+        <td><b style="color:${p.margin>=0?'var(--green)':'var(--red)'}">${kd(p.margin)} د.ك</b></td></tr>`).join("")}
+    </tbody></table>
+    <p class="muted" style="margin-top:10px;font-size:13px">«ربح المنتج» = إيراد المُسلّم − تكلفة الجملة (قبل خصم صرف الإعلانات والبونص). قريبًا هنضيف صرف الإعلانات لحساب صافي الربح.</p></div>` : `<div class="empty">لا توجد بيانات منتجات بعد</div>`;
   }catch(e){ $("#dashBody").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
 
@@ -835,7 +838,7 @@ async function adminProducts(){
     $("#pList").innerHTML = d.products.length ? `<table><thead><tr><th>الصورة</th><th>المنتج</th>${showW?'<th>سعر الجملة</th>':''}<th>سعر البيع</th><th>عروض الكمية</th><th>المخزون</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>
       ${d.products.map(p=>{const off=(p.offers||[]).map(o=>`${o.qty}:${kd(o.price)}`).join("، ")||"—"; return `<tr>
         <td><div style="width:48px;height:48px;border-radius:8px;overflow:hidden;background:#f3f4f6;display:grid;place-items:center;font-size:24px">${isImg(p.image)?`<img src="${p.image}" style="width:100%;height:100%;object-fit:cover">`:(p.image||"📦")}</div></td>
-        <td><b>${esc(p.name)}</b><br><small class="muted">${esc(p.category)}</small></td>
+        <td><b>${esc(p.name)}</b><br><small class="muted">${esc(p.category)}${p.code?` · كود: ${esc(p.code)}`:''}</small></td>
         ${showW?`<td style="color:var(--teal);font-weight:700">${kd(p.wholesale_price)}</td>`:''}
         <td style="font-weight:700">${kd(p.sell_price)}</td>
         <td class="muted" style="font-size:13px">${off}</td>
@@ -864,7 +867,10 @@ function adminProductForm(p){
         <div class="muted" style="font-size:12px;margin-top:6px">JPG / PNG — بتتصغّر تلقائيًا. أول صورة هي الرئيسية.</div>
         <div id="upMsg" class="muted" style="font-size:13px;margin-top:4px"></div>
       </div>
-      <div class="field"><label>اسم المنتج</label><input id="apName" value="${edit?escAttr(p.name):''}" required></div>
+      <div class="row-between">
+        <div class="field" style="flex:2"><label>اسم المنتج</label><input id="apName" value="${edit?escAttr(p.name):''}" required></div>
+        <div class="field" style="flex:1"><label>كود المنتج (للإعلانات)</label><input id="apCode" value="${edit?escAttr(p.code||''):''}" placeholder="مثلاً: KM-105"></div>
+      </div>
       <div class="field"><label>الوصف</label><textarea id="apDesc" rows="2">${edit?escHtml(p.description||''):''}</textarea></div>
       <div class="field"><label>التصنيف</label><input id="apCat" value="${edit?escAttr(p.category||''):''}" placeholder="مثلاً: إلكترونيات"></div>
       <div class="row-between">
@@ -932,7 +938,7 @@ async function saveProduct(e, editId){
     if(v>0) offers.push({qty:q, price:v});
   });
   const body={
-    name:$("#apName").value, description:$("#apDesc").value, category:$("#apCat").value,
+    name:$("#apName").value, code:$("#apCode")?$("#apCode").value:"", description:$("#apDesc").value, category:$("#apCat").value,
     images: UPLOADED_IMGS, image: UPLOADED_IMGS[0] || "📦",
     sell_price:$("#apSell").value, offers, stock:$("#apStock").value };
   const wEl=$("#apWholesale"); if(wEl) body.wholesale_price=wEl.value;

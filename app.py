@@ -198,7 +198,7 @@ def _images_of(r):
 def public_product(r):
     """نسخة المنتج اللي يشوفها المسوّق/الزائر — بدون سعر الجملة."""
     return {"id": r["id"], "name": r["name"], "description": r["description"],
-            "category": r["category"], "image": r["image"], "images": _images_of(r),
+            "category": r["category"], "image": r["image"], "images": _images_of(r), "code": r["code"],
             "sell_price": r["sell_price"], "offers": _offers_of(r), "stock": r["stock"], "active": r["active"]}
 
 
@@ -449,13 +449,18 @@ def api_product_stats(handler, user, qs):
     wsql = (" WHERE " + " AND ".join(where)) if where else ""
     conn = get_conn()
     rows = conn.execute(
-        f"""SELECT oi.product_id, oi.product_name, o.status, o.id AS oid, oi.qty
-            FROM order_items oi JOIN orders o ON o.id=oi.order_id{wsql}""", params
+        f"""SELECT oi.product_id, oi.product_name, o.status, o.id AS oid, oi.qty,
+                   oi.sell_price, oi.wholesale, pr.code AS code
+            FROM order_items oi JOIN orders o ON o.id=oi.order_id
+            LEFT JOIN products pr ON pr.id=oi.product_id{wsql}""", params
     ).fetchall()
     conn.close()
     prod = {}
     for r in rows:
-        p = prod.setdefault(r["product_id"], {"name": r["product_name"], "orders": set(), "qty": 0, "by_status": {}})
+        p = prod.setdefault(r["product_id"], {"name": r["product_name"], "code": r["code"], "orders": set(), "qty": 0, "by_status": {}, "revenue": 0.0, "cogs": 0.0})
+        if r["status"] == "delivered":
+            p["revenue"] += r["sell_price"] or 0
+            p["cogs"] += r["wholesale"] or 0
         p["orders"].add(r["oid"])
         p["qty"] += r["qty"] or 0
         p["by_status"].setdefault(r["status"], set()).add(r["oid"])
@@ -468,10 +473,13 @@ def api_product_stats(handler, user, qs):
         delivered, returned = cnt("delivered"), cnt("returned")
         def rate(a, b):
             return round(100.0 * a / b, 1) if b else 0.0
-        out.append({"product_id": pid, "name": p["name"], "total": total, "qty": p["qty"],
+        margin = round(p["revenue"] - p["cogs"], 3)  # ربح المنتج قبل الإعلانات (بيع − جملة للمسلّم)
+        out.append({"product_id": pid, "name": p["name"], "code": p["code"] or "", "total": total, "qty": p["qty"],
                     "pending": cnt("pending"), "confirmed_total": confirmed_total, "delivered": delivered,
                     "returned": returned, "cancelled": cnt("cancelled"),
-                    "deliver_rate": rate(delivered, confirmed_total), "return_rate": rate(returned, confirmed_total)})
+                    "deliver_rate": rate(delivered, confirmed_total), "return_rate": rate(returned, confirmed_total),
+                    "cancel_rate": rate(cnt("cancelled"), total),
+                    "revenue": round(p["revenue"], 3), "cogs": round(p["cogs"], 3), "margin": margin})
     out.sort(key=lambda x: -x["total"])
     return 200, {"products": out}
 
@@ -780,9 +788,9 @@ def api_admin_add_product(handler, user, body):
         main = imgs[0] if imgs else (body.get("image") or "📦")
         conn = get_conn()
         conn.execute(
-            """INSERT INTO products (name,description,category,image,images,wholesale_price,sell_price,offers,stock)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (body["name"], body.get("description", ""), body.get("category", ""), main, _clean_images(imgs),
+            """INSERT INTO products (name,code,description,category,image,images,wholesale_price,sell_price,offers,stock)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (body["name"], (body.get("code") or "").strip(), body.get("description", ""), body.get("category", ""), main, _clean_images(imgs),
              float(body["wholesale_price"]), float(body["sell_price"]),
              _clean_offers(body.get("offers")), int(body.get("stock", 100))),
         )
@@ -801,7 +809,7 @@ def api_admin_products(handler, user):
     out = []
     for r in rows:
         d = {"id": r["id"], "name": r["name"], "description": r["description"],
-             "category": r["category"], "image": r["image"], "images": _images_of(r),
+             "category": r["category"], "image": r["image"], "images": _images_of(r), "code": r["code"],
              "sell_price": r["sell_price"], "offers": _offers_of(r), "stock": r["stock"], "active": r["active"]}
         if show_wholesale:
             d["wholesale_price"] = r["wholesale_price"]
@@ -824,10 +832,10 @@ def api_admin_update_product(handler, user, body):
         imgs = [u for u in (body.get("images") or []) if isinstance(u, str) and u]
         main = imgs[0] if imgs else (body.get("image") or "📦")
         conn.execute(
-            """UPDATE products SET name=?, description=?, category=?, image=?, images=?,
+            """UPDATE products SET name=?, code=?, description=?, category=?, image=?, images=?,
                    wholesale_price=?, sell_price=?, offers=?, stock=?
                WHERE id=?""",
-            (body["name"], body.get("description", ""), body.get("category", ""), main, _clean_images(imgs),
+            (body["name"], (body.get("code") or "").strip(), body.get("description", ""), body.get("category", ""), main, _clean_images(imgs),
              wholesale, float(body["sell_price"]), _clean_offers(body.get("offers")),
              int(body.get("stock", 100)), pid),
         )
