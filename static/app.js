@@ -79,7 +79,9 @@ async function doRegister(e) {
     const d = await api("/api/register", { method: "POST", body: {
       name: $("#regName").value, email: $("#regEmail").value,
       phone: $("#regPhone").value, password: $("#regPass").value } });
-    saveSession(d);
+    // الحساب قيد المراجعة — مفيش دخول تلقائي
+    switchAuth("login");
+    $("#authAlert").innerHTML = `<div class="alert ok">${d.message||"تم التسجيل، حسابك قيد المراجعة من الإدارة."}</div>`;
   } catch (err) { authErr(err.message); }
   return false;
 }
@@ -130,26 +132,20 @@ async function go(route) {
 function renderHome() {
   app.innerHTML = `
   <section class="hero">
-    <div class="hero-in">
+    <div class="hero-in" style="grid-template-columns:1fr;max-width:820px;text-align:center">
       <div>
         <img src="/logo.png" alt="Kuwait Market" style="height:90px;background:#fff;border-radius:16px;padding:6px;margin-bottom:18px">
         <h1>ابدأ تجارتك الإلكترونية في الكويت <em>بدون رأس مال</em></h1>
         <p>أدِر متجرك، سوّق منتجاتنا، واكسب عمولة على كل بيعة. إحنا بنوفرلك المنتج والتغليف والشحن والتحصيل.</p>
-        <div class="hero-actions">
+        <div class="hero-actions" style="justify-content:center">
           <a class="btn" onclick="USER?go('products'):openAuth('register')">ابدأ الآن مجاناً</a>
-          <a class="btn ghost" onclick="go('products')">تصفّح المنتجات</a>
+          <a class="btn ghost" onclick="USER?go('products'):openAuth('login')">تصفّح المنتجات</a>
         </div>
-        <div class="stats-row">
+        <div class="stats-row" style="justify-content:center">
           <div class="stat"><b>+5K</b><small>تاجر نشط</small></div>
           <div class="stat"><b>15K+</b><small>منتج</small></div>
           <div class="stat"><b>100%</b><small>مجاني</small></div>
         </div>
-      </div>
-      <div class="hero-card">
-        <div style="font-weight:800;margin-bottom:14px">📊 مبيعات اليوم</div>
-        <div class="mini"><span>الطلبات</span><b>234</b></div>
-        <div class="mini"><span>الزيارات</span><b>1.2K</b></div>
-        <div class="mini"><span>رضا العملاء</span><b>98%</b></div>
       </div>
     </div>
   </section>
@@ -189,6 +185,7 @@ const step = (n, t, d) => `<div class="step"><div class="num">${n}</div><h3 styl
 
 /* ================= المنتجات ================= */
 async function renderProducts() {
+  if (!USER) { openAuth("login"); renderHome(); return; }
   app.innerHTML = `<section><div class="wrap">
     <h2 class="section-title">المنتجات</h2>
     <p class="section-sub">اختر منتجاتك وابدأ التسويق</p>
@@ -231,6 +228,7 @@ async function renderDashboard() {
       <a onclick="go('products')">🛍️ المنتجات</a>
       <a onclick="openOrder()">➕ طلب جديد</a>
       <a onclick="dashView('wallet')" id="nv-wallet">💳 محفظتي</a>
+      <a onclick="dashView('password')" id="nv-password">🔑 كلمة المرور</a>
     </aside>
     <div id="dashMain"></div>
   </div>`;
@@ -238,12 +236,13 @@ async function renderDashboard() {
 }
 function dashView(v) {
   DASH_VIEW = v;
-  ["overview","orders","wallet"].forEach(x=>{
+  ["overview","orders","wallet","password"].forEach(x=>{
     const el=$("#nv-"+x); if(el) el.classList.toggle("active",x===v);
   });
   if (v === "overview") dashOverview();
   if (v === "orders") dashOrders();
   if (v === "wallet") dashWallet();
+  if (v === "password") $("#dashMain").innerHTML = passwordFormHTML();
 }
 async function dashOverview() {
   const m = $("#dashMain");
@@ -396,13 +395,15 @@ async function submitOrder(e) {
 let ADMIN_VIEW = "orders";
 const ADMIN_MENU = [
   {v:"orders", perm:"orders", label:"📦 الطلبات"},
+  {v:"pending", perm:"marketers", label:"🆕 طلبات التسجيل"},
   {v:"products", perm:"products", label:"🛍️ المنتجات"},
   {v:"groups", perm:"groups", label:"🗂️ المجموعات"},
   {v:"marketers", perm:"marketers", label:"👥 المسوّقين"},
   {v:"withdrawals", perm:"withdrawals", label:"💳 طلبات السحب"},
   {v:"admins", perm:"__owner__", label:"🛡️ المدراء والصلاحيات"},
+  {v:"password", perm:"__always__", label:"🔑 كلمة المرور"},
 ];
-function allowedMenu(){ return ADMIN_MENU.filter(m => m.perm==="__owner__" ? USER.role==="owner" : can(m.perm)); }
+function allowedMenu(){ return ADMIN_MENU.filter(m => m.perm==="__owner__" ? USER.role==="owner" : (m.perm==="__always__" ? true : can(m.perm))); }
 function renderAdmin() {
   const menu = allowedMenu();
   const roleLabel = USER.role==="owner" ? "المالك" : "مدير";
@@ -421,11 +422,51 @@ function adminView(v) {
   ADMIN_VIEW = v;
   allowedMenu().forEach(m=>{ const el=$("#av-"+m.v); if(el) el.classList.toggle("active",m.v===v); });
   if (v==="orders") adminOrders();
+  if (v==="pending") adminPending();
   if (v==="groups") adminGroups();
   if (v==="withdrawals") adminWithdrawals();
   if (v==="marketers") adminMarketers();
   if (v==="products") adminProducts();
   if (v==="admins") adminAdmins();
+  if (v==="password") adminPassword();
+}
+async function adminPending(){
+  const m=$("#dashMain");
+  m.innerHTML=`<div class="panel"><h2>طلبات التسجيل الجديدة</h2><p class="muted">وافق أو ارفض تفعيل كل حساب جديد.</p><div id="pendList">...</div></div>`;
+  try{
+    const d=await api("/api/admin/pending");
+    $("#pendList").innerHTML = d.pending.length ? `<table><thead><tr><th>الاسم</th><th>الإيميل</th><th>الهاتف</th><th>التاريخ</th><th>الإجراء</th></tr></thead><tbody>
+      ${d.pending.map(u=>`<tr><td><b>${u.name}</b></td><td class="muted">${u.email}</td><td>${u.phone||""}</td><td class="muted">${u.created_at}</td>
+        <td style="white-space:nowrap"><button class="btn green sm" onclick="approveUser(${u.id},'approve')">✔ موافقة</button>
+        <button class="btn red sm" onclick="approveUser(${u.id},'reject')">✖ رفض</button></td></tr>`).join("")}
+    </tbody></table>` : `<div class="empty">لا توجد طلبات تسجيل جديدة 👌</div>`;
+  }catch(e){ $("#pendList").innerHTML=`<div class="empty">${e.message}</div>`; }
+}
+async function approveUser(id, action){
+  try{ await api("/api/admin/approve-user",{method:"POST",body:{user_id:id,action}});
+    toast(action==="approve"?"تم تفعيل الحساب ✅":"تم رفض الحساب"); adminPending();
+  }catch(e){ toast(e.message); }
+}
+function adminPassword(){ $("#dashMain").innerHTML = passwordFormHTML(); }
+function passwordFormHTML(){
+  return `<div class="panel" style="max-width:460px"><h2>تغيير كلمة المرور</h2>
+    <div id="pwAlert"></div>
+    <form onsubmit="return changePassword(event)">
+      <div class="field"><label>كلمة المرور الحالية</label><input id="pwOld" type="password" required></div>
+      <div class="field"><label>كلمة المرور الجديدة (6 أحرف+)</label><input id="pwNew" type="password" required></div>
+      <div class="field"><label>تأكيد كلمة المرور الجديدة</label><input id="pwNew2" type="password" required></div>
+      <button class="btn">حفظ كلمة المرور</button>
+    </form></div>`;
+}
+async function changePassword(e){
+  e.preventDefault();
+  if($("#pwNew").value !== $("#pwNew2").value){ $("#pwAlert").innerHTML=`<div class="alert err">كلمة المرور الجديدة وتأكيدها غير متطابقين</div>`; return false; }
+  try{
+    await api("/api/change-password",{method:"POST",body:{old_password:$("#pwOld").value,new_password:$("#pwNew").value}});
+    $("#pwAlert").innerHTML=`<div class="alert ok">تم تغيير كلمة المرور بنجاح ✅</div>`;
+    $("#pwOld").value=$("#pwNew").value=$("#pwNew2").value="";
+  }catch(err){ $("#pwAlert").innerHTML=`<div class="alert err">${err.message}</div>`; }
+  return false;
 }
 let ORDER_FILTER_GROUP = "";
 async function adminOrders() {

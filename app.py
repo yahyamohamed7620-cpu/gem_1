@@ -57,20 +57,17 @@ def api_register(handler, body):
         return 400, {"error": "البيانات ناقصة أو كلمة المرور أقل من 6 أحرف"}
     conn = get_conn()
     try:
-        cur = conn.execute(
-            "INSERT INTO users (name,email,phone,password,role) VALUES (?,?,?,?,'marketer')",
+        # الحساب الجديد "قيد المراجعة" لحد ما المالك يوافق
+        conn.execute(
+            "INSERT INTO users (name,email,phone,password,role,status) VALUES (?,?,?,?,'marketer','pending')",
             (name, email, phone, hash_password(password)),
         )
         conn.commit()
-        uid = cur.lastrowid
     except Exception:
         conn.close()
         return 409, {"error": "الإيميل مسجّل بالفعل"}
-    token = secrets.token_urlsafe(32)
-    conn.execute("INSERT INTO sessions (token,user_id) VALUES (?,?)", (token, uid))
-    conn.commit()
     conn.close()
-    return 200, {"token": token, "user": {"id": uid, "name": name, "email": email, "role": "marketer", "balance": 0}}
+    return 200, {"pending": True, "message": "تم التسجيل بنجاح! حسابك قيد المراجعة من الإدارة، هيتفعّل بعد الموافقة."}
 
 
 def api_login(handler, body):
@@ -81,6 +78,12 @@ def api_login(handler, body):
     if not row or not verify_password(password, row["password"]):
         conn.close()
         return 401, {"error": "الإيميل أو كلمة المرور غير صحيحة"}
+    if row["status"] == "pending":
+        conn.close()
+        return 403, {"error": "حسابك قيد المراجعة من الإدارة، انتظر الموافقة على التفعيل"}
+    if row["status"] == "rejected":
+        conn.close()
+        return 403, {"error": "تم رفض تفعيل حسابك، تواصل مع الإدارة"}
     if row["status"] == "banned":
         conn.close()
         return 403, {"error": "الحساب محظور، تواصل مع الإدارة"}
@@ -90,6 +93,44 @@ def api_login(handler, body):
     conn.close()
     u = row_to_dict(row)
     return 200, {"token": token, "user": {"id": u["id"], "name": u["name"], "email": u["email"], "role": u["role"], "balance": u["balance"]}}
+
+
+def api_change_password(handler, user, body):
+    old = body.get("old_password") or ""
+    new = body.get("new_password") or ""
+    if len(new) < 6:
+        return 400, {"error": "كلمة المرور الجديدة لازم 6 أحرف على الأقل"}
+    conn = get_conn()
+    row = conn.execute("SELECT password FROM users WHERE id=?", (user["id"],)).fetchone()
+    if not row or not verify_password(old, row["password"]):
+        conn.close()
+        return 400, {"error": "كلمة المرور الحالية غير صحيحة"}
+    conn.execute("UPDATE users SET password=? WHERE id=?", (hash_password(new), user["id"]))
+    conn.commit()
+    conn.close()
+    return 200, {"ok": True}
+
+
+def api_admin_pending(handler, user):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id,name,email,phone,created_at FROM users WHERE role='marketer' AND status='pending' ORDER BY id DESC"
+    ).fetchall()
+    conn.close()
+    return 200, {"pending": [row_to_dict(r) for r in rows]}
+
+
+def api_admin_approve_user(handler, user, body):
+    uid = body.get("user_id")
+    action = body.get("action")
+    if action not in ("approve", "reject"):
+        return 400, {"error": "إجراء غير صحيح"}
+    new_status = "active" if action == "approve" else "rejected"
+    conn = get_conn()
+    conn.execute("UPDATE users SET status=? WHERE id=? AND role='marketer'", (new_status, uid))
+    conn.commit()
+    conn.close()
+    return 200, {"ok": True, "status": new_status}
 
 
 def api_me(handler, user):
@@ -606,7 +647,7 @@ def api_admin_toggle_ban(handler, user, body):
 
 # ------------------------- التوجيه (Routing) -------------------------
 PUBLIC_POST = {"/api/register": api_register, "/api/login": api_login}
-PUBLIC_GET = {"/api/products": api_products, "/api/cities": api_cities}
+PUBLIC_GET = {"/api/cities": api_cities}
 
 def api_admin_list_admins(handler, user):
     conn = get_conn()
@@ -669,6 +710,7 @@ def api_admin_update_admin(handler, user, body):
 _DENY = (403, {"error": "ممنوع"})
 AUTH_GET = {
     "/api/me": lambda h, u, q: api_me(h, u),
+    "/api/products": lambda h, u, q: api_products(h, q),
     "/api/my-orders": lambda h, u, q: api_my_orders(h, u),
     "/api/stats": lambda h, u, q: api_stats(h, u),
     "/api/my-withdrawals": lambda h, u, q: api_my_withdrawals(h, u),
@@ -679,11 +721,14 @@ AUTH_GET = {
     "/api/admin/groups": lambda h, u, q: api_admin_groups(h, u) if (has_perm(u, "groups") or has_perm(u, "marketers") or has_perm(u, "orders")) else _DENY,
     "/api/admin/products": lambda h, u, q: api_admin_products(h, u) if has_perm(u, "products") else _DENY,
     "/api/admin/admins": lambda h, u, q: api_admin_list_admins(h, u) if require_owner(u) else _DENY,
+    "/api/admin/pending": lambda h, u, q: api_admin_pending(h, u) if has_perm(u, "marketers") else _DENY,
 }
 AUTH_POST = {
     "/api/logout": api_logout,
     "/api/orders": api_create_order,
     "/api/withdraw": api_withdraw,
+    "/api/change-password": api_change_password,
+    "/api/admin/approve-user": lambda h, u, b: api_admin_approve_user(h, u, b) if has_perm(u, "marketers") else _DENY,
     "/api/admin/update-order": lambda h, u, b: api_admin_update_order(h, u, b) if has_perm(u, "orders") else _DENY,
     "/api/admin/update-withdrawal": lambda h, u, b: api_admin_update_withdrawal(h, u, b) if has_perm(u, "withdrawals") else _DENY,
     "/api/admin/add-product": lambda h, u, b: api_admin_add_product(h, u, b) if has_perm(u, "products") else _DENY,
@@ -698,7 +743,7 @@ AUTH_POST = {
 }
 
 # المعالِجات اللي بتاخد body
-POST_WITH_BODY = {"/api/orders", "/api/withdraw"}
+POST_WITH_BODY = {"/api/orders", "/api/withdraw", "/api/change-password"}
 
 
 class Handler(BaseHTTPRequestHandler):
