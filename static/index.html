@@ -27,7 +27,7 @@
       </span>
       <!-- أزرار المستخدم -->
       <span id="userBtns" class="hidden" style="display:flex;gap:12px;align-items:center">
-        <a class="btn ghost sm" onclick="go('products')">🛒<span id="cartCount" class="cart-badge">0</span></a>
+        <a class="btn ghost sm" onclick="openOrder()">🛒<span id="cartCount" class="cart-badge">0</span></a>
         <a class="btn blue sm" id="dashLink" onclick="go('dashboard')">لوحتي</a>
         <a class="muted" style="cursor:pointer" onclick="logout()">خروج</a>
       </span>
@@ -59,6 +59,11 @@
       <button class="btn" style="width:100%;justify-content:center">إنشاء الحساب</button>
     </form>
   </div>
+</div>
+
+<!-- نافذة تفاصيل المنتج -->
+<div class="overlay" id="productModal">
+  <div class="modal" id="productModalBody"></div>
 </div>
 
 <!-- نافذة إتمام الطلب -->

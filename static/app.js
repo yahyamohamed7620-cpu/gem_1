@@ -184,26 +184,39 @@ const feature = (ic, t, d) => `<div class="feature"><div class="ic">${ic}</div><
 const step = (n, t, d) => `<div class="step"><div class="num">${n}</div><h3 style="color:var(--blue)">${t}</h3><p class="muted">${d}</p></div>`;
 
 /* ================= المنتجات ================= */
+let CURRENT_CAT = "الكل";
 async function renderProducts() {
   if (!USER) { openAuth("login"); renderHome(); return; }
   app.innerHTML = `<section><div class="wrap">
     <h2 class="section-title">المنتجات</h2>
     <p class="section-sub">اختر منتجاتك وابدأ التسويق</p>
+    <div id="catBar" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-bottom:24px"></div>
     <div class="grid" id="prodGrid"><div class="empty">جاري التحميل...</div></div>
   </div></section>`;
   try {
     const d = await api("/api/products");
     PRODUCTS = d.products;
-    $("#prodGrid").innerHTML = PRODUCTS.map(productCard).join("") ||
-      `<div class="empty">لا توجد منتجات بعد</div>`;
+    renderCatBar();
+    renderProdGrid();
   } catch (e) { $("#prodGrid").innerHTML = `<div class="empty">${e.message}</div>`; }
   renderFooter();
+}
+function renderCatBar(){
+  const cats = ["الكل", ...[...new Set(PRODUCTS.map(p=>p.category).filter(Boolean))]];
+  if(!$("#catBar")) return;
+  $("#catBar").innerHTML = cats.map(c=>
+    `<button class="btn ${c===CURRENT_CAT?'':'gray'} sm" onclick="filterCat('${c.replace(/'/g,"\\'")}')">${c}</button>`).join("");
+}
+function filterCat(c){ CURRENT_CAT=c; renderCatBar(); renderProdGrid(); }
+function renderProdGrid(){
+  const list = CURRENT_CAT==="الكل" ? PRODUCTS : PRODUCTS.filter(p=>p.category===CURRENT_CAT);
+  $("#prodGrid").innerHTML = list.map(productCard).join("") || `<div class="empty">لا توجد منتجات في هذا القسم</div>`;
 }
 function isImg(v){ return v && (v.indexOf("/uploads/")===0 || v.indexOf("http")===0); }
 function thumbInner(p){ return isImg(p.image) ? `<img src="${p.image}" alt="${p.name}" style="max-width:100%;max-height:150px;object-fit:contain">` : (p.image||"📦"); }
 function productCard(p) {
   const offers = (p.offers||[]).map(o=>`<span class="comm" style="background:#fff3ec;color:var(--orange)">${o.qty} بـ ${kd(o.price)}</span>`).join(" ");
-  return `<div class="product">
+  return `<div class="product" style="cursor:pointer" onclick="openProduct(${p.id})">
     <div class="thumb">${thumbInner(p)}</div>
     <div class="body">
       <span class="cat">${p.category || ""}</span>
@@ -212,9 +225,49 @@ function productCard(p) {
         <span class="price">${kd(p.sell_price)} د.ك</span>
       </div>
       ${offers?`<div style="display:flex;gap:6px;flex-wrap:wrap">${offers}</div>`:""}
-      <button class="btn" onclick="addToCart(${p.id})">أضف إلى السلة</button>
+      <button class="btn" onclick="event.stopPropagation();addToCart(${p.id})">أضف إلى السلة</button>
     </div>
   </div>`;
+}
+
+// ===== نافذة تفاصيل المنتج =====
+let PM_QTY = 1;
+let PM_PID = null;
+function openProduct(pid){
+  const p = PRODUCTS.find(x=>x.id===pid); if(!p) return;
+  PM_QTY = 1; PM_PID = pid;
+  const big = isImg(p.image) ? `<img src="${p.image}" style="max-width:100%;max-height:260px;object-fit:contain">` : `<div style="font-size:120px">${p.image||"📦"}</div>`;
+  const offers = (p.offers||[]).map(o=>`<span class="comm" style="background:#fff3ec;color:var(--orange)">${o.qty} قطعة بـ ${kd(o.price)} د.ك</span>`).join(" ");
+  $("#productModalBody").innerHTML = `
+    <button class="x" onclick="closeProduct()">×</button>
+    <div style="text-align:center;background:linear-gradient(135deg,#eef9f8,#fff3ec);border-radius:14px;padding:20px;margin-bottom:14px">${big}</div>
+    <span class="cat" style="color:var(--muted)">${p.category||""}</span>
+    <h2 style="color:var(--text);margin:4px 0 8px">${p.name}</h2>
+    <p class="muted" style="margin-bottom:10px">${p.description||""}</p>
+    <div class="price" style="font-size:24px;margin-bottom:10px">${kd(p.sell_price)} د.ك</div>
+    ${offers?`<div style="margin-bottom:12px"><b style="font-size:14px">🎁 عروض الكمية:</b><br><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${offers}</div></div>`:""}
+    <div class="row-between" style="margin:14px 0">
+      <span>الكمية</span>
+      <div class="qty"><button type="button" onclick="pmQty(-1)">−</button><span id="pmQtyVal">1</span><button type="button" onclick="pmQty(1)">+</button></div>
+      <span>السعر: <b id="pmLine" style="color:var(--orange)">${kd(p.sell_price)}</b> د.ك</span>
+    </div>
+    <button class="btn" style="width:100%;justify-content:center" onclick="addProductFromModal(${p.id})">أضف إلى السلة 🛒</button>`;
+  $("#productModal").classList.add("show");
+}
+function closeProduct(){ $("#productModal").classList.remove("show"); }
+function pmQty(d){
+  PM_QTY = Math.max(1, PM_QTY + d);
+  const p = PRODUCTS.find(x=>x.id===PM_PID);
+  $("#pmQtyVal").textContent = PM_QTY;
+  if(p) $("#pmLine").textContent = kd(linePrice(p, PM_QTY));
+}
+function addProductFromModal(pid){
+  if (!USER) { openAuth("login"); return; }
+  if (isAdminRole()) { toast("الأدمن مايعملش طلبات"); return; }
+  const p = PRODUCTS.find(x=>x.id===pid);
+  CART[pid] = { product: p, qty: PM_QTY };
+  updateCartCount(); closeProduct();
+  toast(`تمت إضافة ${PM_QTY} للسلة 🛒`);
 }
 
 /* ================= لوحة المسوّق ================= */
