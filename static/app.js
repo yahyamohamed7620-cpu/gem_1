@@ -231,8 +231,17 @@ function renderCatBar(){
     `<button class="btn ${c===CURRENT_CAT?'':'gray'} sm" onclick="filterCat('${c.replace(/'/g,"\\'")}')">${c}</button>`).join("");
 }
 function filterCat(c){ CURRENT_CAT=c; renderCatBar(); renderProdGrid(); }
+// أقسام المنتج: مخزّنة كمصفوفة JSON في حقل category، أو نص واحد قديم
+function catList(p){
+  const v = p && p.category;
+  if(!v) return [];
+  if(Array.isArray(v)) return v;
+  const s = String(v).trim();
+  if(s[0]==="["){ try{ const a=JSON.parse(s); return Array.isArray(a)?a:[]; }catch(e){} }
+  return s ? [s] : [];
+}
 function renderProdGrid(){
-  const list = CURRENT_CAT==="الكل" ? PRODUCTS : PRODUCTS.filter(p=>p.category===CURRENT_CAT);
+  const list = CURRENT_CAT==="الكل" ? PRODUCTS : PRODUCTS.filter(p=>catList(p).includes(CURRENT_CAT));
   $("#prodGrid").innerHTML = list.map(productCard).join("") || `<div class="empty">لا توجد منتجات في هذا القسم</div>`;
 }
 function isImg(v){ return v && (v.indexOf("/uploads/")===0 || v.indexOf("http")===0); }
@@ -242,7 +251,7 @@ function productCard(p) {
   return `<div class="product" style="cursor:pointer" onclick="viewProduct(${p.id})">
     <div class="thumb">${thumbInner(p)}</div>
     <div class="body">
-      <span class="cat">${esc(p.category)}</span>
+      <span class="cat">${esc(catList(p)[0]||"")}</span>
       <h4>${esc(p.name)}</h4>
       <div class="price-box">
         <span class="price">${kd(p.sell_price)} د.ك</span>
@@ -272,7 +281,7 @@ async function viewProduct(pid){
     <div class="dash" style="grid-template-columns:1fr 1fr;align-items:start">
       <div class="panel" style="text-align:center;background:linear-gradient(135deg,#eef9f8,#fff3ec)">${big}${thumbs}</div>
       <div class="panel">
-        <span class="cat" style="color:var(--muted)">${esc(p.category)}</span>
+        <span class="cat" style="color:var(--muted)">${esc(catList(p).join("، "))}</span>
         <h1 style="color:var(--blue);font-size:28px;margin:6px 0 10px">${esc(p.name)}</h1>
         <p class="muted" style="margin-bottom:14px">${esc(p.description)}</p>
         <div class="price" style="font-size:30px;margin-bottom:14px">${kd(p.sell_price)} د.ك</div>
@@ -931,7 +940,7 @@ async function adminProducts(){
     $("#pList").innerHTML = d.products.length ? `<table><thead><tr><th>الصورة</th><th>المنتج</th>${showW?'<th>سعر الجملة</th>':''}<th>سعر البيع</th><th>عروض الكمية</th><th>المخزون</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>
       ${d.products.map(p=>{const off=(p.offers||[]).map(o=>`${o.qty}:${kd(o.price)}`).join("، ")||"—"; return `<tr>
         <td><div style="width:48px;height:48px;border-radius:8px;overflow:hidden;background:#f3f4f6;display:grid;place-items:center;font-size:24px">${isImg(p.image)?`<img src="${p.image}" style="width:100%;height:100%;object-fit:cover">`:(p.image||"📦")}</div></td>
-        <td><b>${esc(p.name)}</b><br><small class="muted">${esc(p.category)}${p.code?` · كود: ${esc(p.code)}`:''}</small></td>
+        <td><b>${esc(p.name)}</b><br><small class="muted">${esc(catList(p).join("، "))}${p.code?` · كود: ${esc(p.code)}`:''}</small></td>
         ${showW?`<td style="color:var(--teal);font-weight:700">${kd(p.wholesale_price)}</td>`:''}
         <td style="font-weight:700">${kd(p.sell_price)}</td>
         <td class="muted" style="font-size:13px">${off}</td>
@@ -965,9 +974,11 @@ function adminProductForm(p){
         <div class="field" style="flex:1"><label>كود المنتج (للإعلانات)</label><input id="apCode" value="${edit?escAttr(p.code||''):''}" placeholder="مثلاً: KM-105"></div>
       </div>
       <div class="field"><label>الوصف</label><textarea id="apDesc" rows="2">${edit?escHtml(p.description||''):''}</textarea></div>
-      <div class="field"><label>القسم</label><select id="apCat">${
-        ["<option value=''>— اختر القسم —</option>", ...CATEGORIES.map(c=>`<option value="${escAttr(c)}"${edit&&p.category===c?' selected':''}>${c}</option>`)].join("")
-      }</select></div>
+      <div class="field"><label>الأقسام (اختر قسم أو أكتر)</label>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">${
+          CATEGORIES.map(c=>{const on=edit&&catList(p).includes(c); return `<label style="display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer;font-size:14px"><input type="checkbox" class="apCatChk" value="${escAttr(c)}"${on?' checked':''}>${c}</label>`;}).join("")
+        }</div>
+      </div>
       <div class="row-between">
         ${can("wholesale")?`<div class="field" style="flex:1"><label>💼 سعر الجملة (للأدمن فقط)</label><input id="apWholesale" type="number" step="0.001" value="${edit&&p.wholesale_price!=null?p.wholesale_price:''}" required></div>`:''}
         <div class="field" style="flex:1"><label>🏷️ سعر البيع (يظهر للمسوّق)</label><input id="apSell" type="number" step="0.001" value="${edit?p.sell_price:''}" required></div>
@@ -1033,7 +1044,8 @@ async function saveProduct(e, editId){
     if(v>0) offers.push({qty:q, price:v});
   });
   const body={
-    name:$("#apName").value, code:$("#apCode")?$("#apCode").value:"", description:$("#apDesc").value, category:$("#apCat").value,
+    name:$("#apName").value, code:$("#apCode")?$("#apCode").value:"", description:$("#apDesc").value,
+    category: JSON.stringify([...document.querySelectorAll(".apCatChk:checked")].map(x=>x.value)),
     images: UPLOADED_IMGS, image: UPLOADED_IMGS[0] || "📦",
     sell_price:$("#apSell").value, offers, stock:$("#apStock").value };
   const wEl=$("#apWholesale"); if(wEl) body.wholesale_price=wEl.value;
