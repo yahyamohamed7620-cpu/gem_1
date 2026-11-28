@@ -72,7 +72,11 @@ def _file(start_response, path):
     ctype = CTYPES.get(ext, "application/octet-stream")
     with open(path, "rb") as f:
         data = f.read()
-    start_response("200 OK", [("Content-Type", ctype), ("Content-Length", str(len(data)))])
+    # منع الكاش على ملفات الواجهة عشان أي تحديث يظهر فورًا للمستخدم
+    headers = [("Content-Type", ctype), ("Content-Length", str(len(data)))]
+    if ext in (".html", ".js", ".css"):
+        headers.append(("Cache-Control", "no-cache, no-store, must-revalidate"))
+    start_response("200 OK", headers)
     return [data]
 
 
