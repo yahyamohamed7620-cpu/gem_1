@@ -369,15 +369,12 @@ PERMISSIONS = {
 def has_perm(user, key):
     if not user:
         return False
-    if user["role"] == "owner":
+    # المالك والمدير عندهم كل الصلاحيات التشغيلية.
+    # الصلاحيات الحصرية للمالك (الموافقة على التسجيلات، إدارة المدراء،
+    # النسخة الاحتياطية) محميّة بـ require_owner مش has_perm.
+    if user["role"] in ("owner", "admin"):
         return True
-    if user["role"] != "admin":
-        return False
-    try:
-        perms = json.loads(user.get("permissions") or "[]")
-    except Exception:
-        perms = []
-    return key in perms
+    return False
 
 
 def api_admin_orders(handler, user, qs=None):
@@ -746,7 +743,7 @@ def api_admin_update_order(handler, user, body):
     """تحديث حالة الطلب. لما يبقى delivered بتتسجّل العمولة في رصيد المسوق."""
     oid = body.get("order_id")
     status = body.get("status")
-    valid = {"pending", "confirmed", "shipped", "delivered", "cancelled", "returned"}
+    valid = {"pending", "confirmed", "postponed", "shipped", "delivered", "cancelled", "returned"}
     if status not in valid:
         return 400, {"error": "حالة غير صحيحة"}
     conn = get_conn()
@@ -1031,7 +1028,7 @@ AUTH_GET = {
     "/api/admin/groups": lambda h, u, q: api_admin_groups(h, u) if (has_perm(u, "groups") or has_perm(u, "marketers") or has_perm(u, "orders")) else _DENY,
     "/api/admin/products": lambda h, u, q: api_admin_products(h, u) if has_perm(u, "products") else _DENY,
     "/api/admin/admins": lambda h, u, q: api_admin_list_admins(h, u) if require_owner(u) else _DENY,
-    "/api/admin/pending": lambda h, u, q: api_admin_pending(h, u) if has_perm(u, "marketers") else _DENY,
+    "/api/admin/pending": lambda h, u, q: api_admin_pending(h, u) if require_owner(u) else _DENY,
     "/api/admin/product-stats": lambda h, u, q: api_product_stats(h, u, q) if has_perm(u, "products") else _DENY,
     "/api/admin/spend-entries": lambda h, u, q: api_admin_spend_entries(h, u, q) if has_perm(u, "products") else _DENY,
     "/api/admin/backup": lambda h, u, q: api_admin_backup(h, u, q) if require_owner(u) else _DENY,
@@ -1041,7 +1038,7 @@ AUTH_POST = {
     "/api/orders": api_create_order,
     "/api/withdraw": api_withdraw,
     "/api/change-password": api_change_password,
-    "/api/admin/approve-user": lambda h, u, b: api_admin_approve_user(h, u, b) if has_perm(u, "marketers") else _DENY,
+    "/api/admin/approve-user": lambda h, u, b: api_admin_approve_user(h, u, b) if require_owner(u) else _DENY,
     "/api/admin/update-order": lambda h, u, b: api_admin_update_order(h, u, b) if has_perm(u, "orders") else _DENY,
     "/api/admin/update-withdrawal": lambda h, u, b: api_admin_update_withdrawal(h, u, b) if has_perm(u, "withdrawals") else _DENY,
     "/api/admin/add-product": lambda h, u, b: api_admin_add_product(h, u, b) if has_perm(u, "products") else _DENY,

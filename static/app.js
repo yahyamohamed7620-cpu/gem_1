@@ -7,7 +7,9 @@ let CITIES = [];
 
 function can(key){
   if(!USER) return false;
-  if(USER.role==="owner") return true;
+  // المالك والمدير: كل الصلاحيات التشغيلية. البنود الحصرية للمالك
+  // (طلبات التسجيل، المدراء، النسخة الاحتياطية) محميّة بـ __owner__ في القائمة.
+  if(USER.role==="owner"||USER.role==="admin") return true;
   return (USER.permissions||[]).includes(key);
 }
 function isAdminRole(){ return USER && (USER.role==="admin"||USER.role==="owner"); }
@@ -498,7 +500,7 @@ const ADMIN_MENU = [
   {v:"dashboard", perm:"orders", label:"📊 الإحصائيات"},
   {v:"productstats", perm:"products", label:"📦 إحصائيات المنتجات"},
   {v:"orders", perm:"orders", label:"📋 الطلبات"},
-  {v:"pending", perm:"marketers", label:"🆕 طلبات التسجيل"},
+  {v:"pending", perm:"__owner__", label:"🆕 طلبات التسجيل"},
   {v:"products", perm:"products", label:"🛍️ المنتجات"},
   {v:"groups", perm:"groups", label:"🗂️ المجموعات"},
   {v:"marketers", perm:"marketers", label:"👥 المسوّقين"},
@@ -1078,13 +1080,6 @@ async function adminAdmins(){
     <div class="panel"><h2>المدراء الحاليون</h2><div id="adList">...</div></div>`;
   try{
     const d=await api("/api/admin/admins");
-    PERM_CATALOG=d.perm_catalog;
-    const permChecks = (selected, boxId)=>
-      `<label style="display:inline-flex;align-items:center;gap:6px;margin:0 0 10px;font-weight:700;color:var(--blue);width:100%;border-bottom:1px dashed var(--line);padding-bottom:8px">
-        <input type="checkbox" onclick="togglePerms('${boxId}',this.checked)" ${Object.keys(PERM_CATALOG).every(k=>selected.includes(k))?"checked":""}> ✅ تحديد الكل</label>`
-      + Object.entries(PERM_CATALOG).map(([k,label])=>
-      `<label style="display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0;font-weight:500">
-        <input type="checkbox" value="${k}" ${selected.includes(k)?"checked":""}> ${label}</label>`).join("");
     $("#addAdminForm").innerHTML=`<form onsubmit="return addAdmin(event)">
       <div class="row-between">
         <div class="field" style="flex:1"><label>الاسم</label><input id="naName" required></div>
@@ -1094,30 +1089,24 @@ async function adminAdmins(){
         <div class="field" style="flex:1"><label>الهاتف</label><input id="naPhone"></div>
         <div style="flex:1">${pwField("naPass","كلمة المرور (6 أحرف+)")}</div>
       </div>
-      <div class="field"><label>الصلاحيات</label><div id="naPerms" style="background:#f8fafc;border-radius:10px;padding:10px">${permChecks([],"naPerms")}</div></div>
+      <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:12px;margin:8px 0;font-size:13px;color:#075985">
+        🛡️ المدير بياخد <b>كل الصلاحيات</b> زي المالك (طلبات، تعديل الحالات، تحميل، منتجات، مجموعات، مسوّقين، سحب...) <b>ماعدا</b>: الموافقة على طلبات تسجيل المسوّقين، وإدارة المدراء والصلاحيات، والنسخة الاحتياطية — دي للمالك بس.</div>
       <button class="btn">➕ إضافة المدير</button>
     </form>`;
     $("#adList").innerHTML = d.admins.map(a=>{
       if(a.role==="owner") return `<div class="row-between" style="padding:12px;border-bottom:1px solid var(--line)">
         <div><b>${a.name}</b> <span class="badge b-active">المالك</span><br><small class="muted">${a.email}</small></div>
         <div class="muted">كل الصلاحيات</div></div>`;
-      return `<div style="padding:12px;border-bottom:1px solid var(--line)">
-        <div class="row-between"><div><b>${a.name}</b> <span class="badge ${a.status==='active'?'b-active':'b-banned'}">${a.status==='active'?'نشط':'موقوف'}</span><br><small class="muted">${a.email}</small></div>
-          <div><button class="btn sm ${a.status==='active'?'red':'green'}" onclick="toggleAdminStatus(${a.id},'${a.status==='active'?'banned':'active'}')">${a.status==='active'?'إيقاف':'تفعيل'}</button></div></div>
-        <div id="perms-${a.id}" style="margin-top:8px;background:#f8fafc;border-radius:10px;padding:10px">${permChecks(a.permissions,"perms-"+a.id)}</div>
-        <button class="btn sm blue" style="margin-top:8px" onclick="saveAdminPerms(${a.id})">حفظ صلاحياته</button>
-      </div>`;
+      return `<div class="row-between" style="padding:12px;border-bottom:1px solid var(--line)">
+        <div><b>${a.name}</b> <span class="badge ${a.status==='active'?'b-active':'b-banned'}">${a.status==='active'?'نشط':'موقوف'}</span> <span class="badge b-confirmed">مدير كامل الصلاحيات</span><br><small class="muted">${a.email}</small></div>
+        <div><button class="btn sm ${a.status==='active'?'red':'green'}" onclick="toggleAdminStatus(${a.id},'${a.status==='active'?'banned':'active'}')">${a.status==='active'?'إيقاف':'تفعيل'}</button></div></div>`;
     }).join("");
   }catch(e){ $("#adList").innerHTML=`<div class="empty">${e.message}</div>`; }
 }
-function togglePerms(boxId, on){
-  $("#"+boxId).querySelectorAll("input[value]").forEach(c=>{ c.checked=on; });
-}
 async function addAdmin(e){
   e.preventDefault();
-  const perms=[...$("#naPerms").querySelectorAll("input[value]:checked")].map(x=>x.value);
   try{
-    await api("/api/admin/add-admin",{method:"POST",body:{name:$("#naName").value,email:$("#naEmail").value,phone:$("#naPhone").value,password:$("#naPass").value,permissions:perms}});
+    await api("/api/admin/add-admin",{method:"POST",body:{name:$("#naName").value,email:$("#naEmail").value,phone:$("#naPhone").value,password:$("#naPass").value,permissions:[]}});
     toast("تم إضافة المدير ✅"); adminAdmins();
   }catch(err){ $("#adAlert").innerHTML=`<div class="alert err">${err.message}</div>`; }
   return false;
@@ -1133,9 +1122,9 @@ async function toggleAdminStatus(id,status){
 }
 
 /* ================= مشترك ================= */
-function statusAr(s){return{pending:"قيد الانتظار",confirmed:"مؤكد",shipped:"قيد الشحن",delivered:"تم التسليم",
+function statusAr(s){return{pending:"قيد الانتظار",confirmed:"مؤكد",postponed:"مؤجل",shipped:"قيد الشحن",delivered:"تم التسليم",
   cancelled:"ملغي",returned:"مرتجع",paid:"مدفوع",rejected:"مرفوض"}[s]||s;}
-const ORDER_STATUSES=["pending","confirmed","shipped","delivered","returned","cancelled"];
+const ORDER_STATUSES=["pending","confirmed","postponed","shipped","delivered","returned","cancelled"];
 function renderFooter(){
   if ($("#ftr")) return;
   const f=document.createElement("footer"); f.id="ftr";
